@@ -24,6 +24,7 @@ For the browser client and local Worker, activate Emscripten and install `zip`, 
 
 ```sh
 ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
+cd website
 pnpm install
 pnpm start
 ```

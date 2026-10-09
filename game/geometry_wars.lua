@@ -8,6 +8,7 @@ local bitmapfont = require "font"
 local flow = require "flow"
 local persist = require "persist"
 local util = require "utils"
+local netcode = require "netcode"
 
 math.randomseed(os.time())
 
@@ -644,8 +645,18 @@ local ENGINE_GLOW = argb(150, 255, 180, 60)
 local BULLET_SPARK_SPREAD = 100.0 * math.pi / 180.0
 local ATTRACT_SPARK_SPREAD = 60.0 * math.pi / 180.0
 local THRUST_SPREAD = 60.0 * math.pi / 180.0
-local THRUST_NORMAL_COLOR_RANGE = { r = { 150, 254 }, g = { 220, 255 }, b = { 200, 254 }, step = 16 }
-local THRUST_ENERGY_COLOR_RANGE = { r = 255, g = 240, b = { 200, 254 }, step = 16 }
+local THRUST_NORMAL_COLOR_RANGE = {
+	r = { 150, 254 },
+	g = { 220, 255 },
+	b = { 200, 254 },
+	step = 16
+}
+local THRUST_ENERGY_COLOR_RANGE = {
+	r = 255,
+	g = 240,
+	b = { 200, 254 },
+	step = 16
+}
 
 local ENEMY_DEFS = {
 	[0] = {
@@ -789,6 +800,7 @@ local state = {
 	total_time = 0.0,
 	---@type number
 	lives = MAX_LIVES,
+	life_id = 0,
 	---@type number
 	score = 0,
 	---@type number
@@ -855,11 +867,34 @@ local audio = {
 	death_sound_played = false,
 	shoot = { "shoot_01", "shoot_02", "shoot_03", "shoot_04" },
 	explosion = {
-		"explosion_01", "explosion_02", "explosion_03", "explosion_04",
-		"explosion_05", "explosion_06", "explosion_07", "explosion_08",
+		"explosion_01",
+		"explosion_02",
+		"explosion_03",
+		"explosion_04",
+		"explosion_05",
+		"explosion_06",
+		"explosion_07",
+		"explosion_08",
 	},
-	spawn = { "spawn_01", "spawn_02", "spawn_03", "spawn_04", "spawn_05", "spawn_06", "spawn_07", "spawn_08" },
-	rise = { "rise_01", "rise_02", "rise_03", "rise_04", "rise_05", "rise_06", "rise_07" },
+	spawn = {
+		"spawn_01",
+		"spawn_02",
+		"spawn_03",
+		"spawn_04",
+		"spawn_05",
+		"spawn_06",
+		"spawn_07",
+		"spawn_08"
+	},
+	rise = {
+		"rise_01",
+		"rise_02",
+		"rise_03",
+		"rise_04",
+		"rise_05",
+		"rise_06",
+		"rise_07"
+	},
 	powerup = "powerup_01",
 	death = "explosion_01",
 	game_over = "explosion_02",
@@ -888,6 +923,8 @@ local stars_near = {}
 local grid = {}
 ---@type any[]
 local bullets = {}
+local predicted_bullets = {}
+local entity_id = 0
 ---@type any[]
 local enemies = {}
 local feedback = {
@@ -983,7 +1020,11 @@ function feedback.draw_bevel_rect(x, y, width, height, face, pressed)
 		if rw <= 0 or rh <= 0 then
 			return
 		end
-		batch:add(quad { width = rw, height = rh, color = color }, rx, ry)
+		batch:add(quad {
+			width = rw,
+			height = rh,
+			color = color
+		}, rx, ry)
 	end
 
 	add_rect(x, y, width, height, face)
@@ -1127,7 +1168,9 @@ local function ensure_music_playing()
 end
 
 local function play_effect(name, opts)
-	if multiplayer then multiplayer.record("sound", {name, opts or {}}) end
+	if multiplayer then
+		multiplayer.record("sound", { name, opts or {} })
+	end
 	local voice, err = soluna.play_sound(name, opts)
 	if voice == nil then
 		error(err or ("failed to play sound " .. tostring(name)))
@@ -1340,9 +1383,20 @@ function feedback.ticker_add(text, color)
 end
 
 local function spawn_bullet(angle, homing)
+	local predicted = multiplayer and multiplayer.started and not multiplayer.host
+	local pool = predicted and predicted_bullets or bullets
 	for i = 1, MAX_BULLETS do
-		local bullet = bullets[i]
+		local bullet = pool[i]
+		if not bullet then
+			bullet = {}
+			pool[i] = bullet
+		end
 		if not bullet.active then
+			if not predicted then
+				entity_id = entity_id + 1
+			end
+			bullet.id = entity_id
+			bullet.input_seq = predicted and multiplayer.input_seq or nil
 			bullet.active = true
 			bullet.x = player.x + math.cos(angle) * 15.0
 			bullet.y = player.y + math.sin(angle) * 15.0
@@ -1355,7 +1409,9 @@ local function spawn_bullet(angle, homing)
 end
 
 local function emit_particles(emitter)
-	if multiplayer then multiplayer.record("emit", emitter) end
+	if multiplayer then
+		multiplayer.record("emit", emitter)
+	end
 	ltask.send(particle, "emit", emitter)
 end
 
@@ -1380,6 +1436,8 @@ local function spawn_enemy(enemy_type, x, y)
 	for i = 1, MAX_ENEMIES do
 		local enemy = enemies[i]
 		if not enemy.active then
+			entity_id = entity_id + 1
+			enemy.id = entity_id
 			enemy.active = true
 			enemy.type = enemy_type
 			enemy.x = x
@@ -1560,23 +1618,30 @@ local function update_enemies(dt)
 end
 
 local function handle_player_hit(enemy_type)
+	if not state.player_alive then
+		return
+	end
 	state.killed_by_type = enemy_type
-	state.lives = state.lives - 1
+	state.lives = math.max(0, state.lives - 1)
+	state.life_id = state.life_id + 1
 	powerup.clear_ability()
-	if state.lives <= 0 then
+	-- The other living player owns one of the remaining lives. Everything
+	-- beyond that is a shared reserve, available to either player.
+	local occupied = multiplayer and multiplayer.other_alive() and 1 or 0
+	if state.lives <= occupied then
 		state.player_alive = false
 		if not multiplayer or not multiplayer.other_alive() then
-		for i = 1, MAX_ENEMIES do
-			enemies[i].active = false
-		end
-		if enemy_type < 0 then
-			for i = 1, 2 do
-				powerup.black_holes[i].active = false
+			for i = 1, MAX_ENEMIES do
+				enemies[i].active = false
 			end
-		end
-		for i = 1, MAX_BULLETS do
-			bullets[i].active = false
-		end
+			if enemy_type < 0 then
+				for i = 1, 2 do
+					powerup.black_holes[i].active = false
+				end
+			end
+			for i = 1, MAX_BULLETS do
+				bullets[i].active = false
+			end
 		end
 		spawn_explosion(player.x, player.y, COLOR_WHITE, 80)
 		spawn_explosion(player.x, player.y, COLOR_CYAN, 60)
@@ -2170,8 +2235,15 @@ function powerup.draw_black_holes()
 						2.0)
 				end
 				if wave_r > 0.02 then
-					draw_masked_ring(particle_alpha(argb(255, 220, 150, 255), wave_alpha * 0.5), wave_r * 0.5, bh.x, bh
-						.y, 2.0, 0.75, 1.5)
+					draw_masked_ring(
+						particle_alpha(argb(255, 220, 150, 255), wave_alpha * 0.5),
+						wave_r * 0.5,
+						bh.x,
+						bh.y,
+						2.0,
+						0.75,
+						1.5
+					)
 				end
 			else
 				local pulse_scale = math.sin(bh.pulse) * 0.1 + 1.0
@@ -2394,7 +2466,9 @@ local function init_grid()
 end
 
 grid_impulse = function(cx, cy, radius, strength)
-	if multiplayer then multiplayer.record("grid", { cx, cy, radius, strength }) end
+	if multiplayer then
+		multiplayer.record("grid", { cx, cy, radius, strength })
+	end
 	for row = 1, GRID_ROWS do
 		local nodes = grid[row]
 		for col = 1, GRID_COLS do
@@ -2447,10 +2521,21 @@ local function ensure_runtime_pools()
 		enemies[i] = { active = false, type = 0 }
 	end
 	for i = 1, MAX_FLOAT_TEXTS do
-		feedback.float_texts[i] = { life = 0, max_life = 0, text = "", color = COLOR_WHITE }
+		feedback.float_texts[i] = {
+			life = 0,
+			max_life = 0,
+			text = "",
+			color = COLOR_WHITE
+		}
 	end
 	for i = 1, MAX_TICKER do
-		feedback.ticker_msgs[i] = { text = "", color = COLOR_WHITE, life = 0.0, timer = 0.0, active = false }
+		feedback.ticker_msgs[i] = {
+			text = "",
+			color = COLOR_WHITE,
+			life = 0.0,
+			timer = 0.0,
+			active = false
+		}
 	end
 	for i = 1, 2 do
 		powerup.black_holes[i] = {
@@ -2492,6 +2577,9 @@ local function clear_runtime_state()
 	state.combo_timer = 0.0
 	state.combo_bump_timer = 0.0
 	state.lives = MAX_LIVES
+	state.life_id = 0
+	entity_id = 0
+	predicted_bullets = {}
 	state.player_alive = true
 	state.respawn_invincible = false
 	state.respawn_timer = 0.0
@@ -2618,10 +2706,11 @@ local function update_shooting(dt)
 	end
 end
 
-local function update_bullets(dt)
+local function update_bullets(dt, pool)
+	pool = pool or bullets
 	for i = 1, MAX_BULLETS do
-		local bullet = bullets[i]
-		if bullet.active then
+		local bullet = pool[i]
+		if bullet and bullet.active then
 			if bullet.homing then
 				local best_dist = 999999.0
 				local nearest_x = 0.0
@@ -2721,54 +2810,19 @@ local function record_trail()
 end
 
 local function update_player(dt)
-	---@type number
-	local dx = 0
-	---@type number
-	local dy = 0
-	if input.left then
-		dx = dx - 1
-	end
-	if input.right then
-		dx = dx + 1
-	end
-	if input.up then
-		dy = dy - 1
-	end
-	if input.down then
-		dy = dy + 1
-	end
-
-	local len_sq = dx * dx + dy * dy
-	local is_moving = len_sq > 0
-	if len_sq > 0 then
-		local inv_len = 1.0 / math.sqrt(len_sq)
-		dx = dx * inv_len
-		dy = dy * inv_len
-		player.x = player.x + dx * PLAYER_SPEED * dt
-		player.y = player.y + dy * PLAYER_SPEED * dt
-	end
-	player.x = clamp(player.x, 20, MAP_W - 20)
-	player.y = clamp(player.y, 20, MAP_H - 20)
-	for i = 1, 2 do
-		local bh = powerup.black_holes[i]
-		if bh.active and not bh.exploding then
-			local x = bh.x - player.x
-			local y = bh.y - player.y
-			local dist = distance(player.x, player.y, bh.x, bh.y)
-			if dist < bh.radius and dist > 1.0 then
-				player.x = player.x + (x / dist) * bh.pull_strength * 0.3 * dt
-				player.y = player.y + (y / dist) * bh.pull_strength * 0.3 * dt
-				player.x = clamp(player.x, 20, MAP_W - 20)
-				player.y = clamp(player.y, 20, MAP_H - 20)
-			end
-		end
-	end
-
-	local aim_dx = mouse_world_x - player.x
-	local aim_dy = mouse_world_y - player.y
-	if aim_dx * aim_dx + aim_dy * aim_dy > 25 then
-		player.angle = math.atan(aim_dy, aim_dx)
-	end
+	local is_moving = netcode.move(player, {
+		left = input.left,
+		right = input.right,
+		up = input.up,
+		down = input.down,
+		mx = mouse_world_x,
+		my = mouse_world_y,
+	}, dt, {
+		speed = PLAYER_SPEED,
+		width = MAP_W,
+		height = MAP_H,
+		black_holes = powerup.black_holes
+	})
 
 	state.trail_timer = state.trail_timer + dt
 	while state.trail_timer >= TRAIL_INTERVAL do
@@ -2799,8 +2853,9 @@ local function update_player(dt)
 end
 
 local function update_camera(dt)
-	local target_x = clamp(player.x - W * 0.5, 0, MAP_W - W)
-	local target_y = clamp(player.y - H * 0.5, 0, MAP_H - H)
+	local x, y = multiplayer.camera_target()
+	local target_x = clamp(x - W * 0.5, 0, MAP_W - W)
+	local target_y = clamp(y - H * 0.5, 0, MAP_H - H)
 	local factor = 1.0 - (1.0 - CAMERA_LERP) ^ (dt * 60.0)
 	camera.x = camera.x + (target_x - camera.x) * factor
 	camera.y = camera.y + (target_y - camera.y) * factor
@@ -2816,7 +2871,11 @@ local function draw_grid_segment(ax, ay, bx, by, color)
 	local angle = math.atan(dy, dx)
 	local width = math.max(1, math.floor(len + 0.5))
 	batch:layer(1, angle, ax, ay)
-	batch:add(quad { width = width, height = 1, color = color }, 0, -0.5)
+	batch:add(quad {
+		width = width,
+		height = 1,
+		color = color
+	}, 0, -0.5)
 	batch:layer()
 end
 
@@ -2844,10 +2903,26 @@ local function draw_grid()
 end
 
 local function draw_world_border()
-	batch:add(quad { width = MAP_W, height = 3, color = COLOR_BORDER }, 0, 0)
-	batch:add(quad { width = MAP_W, height = 3, color = COLOR_BORDER }, 0, MAP_H - 3)
-	batch:add(quad { width = 3, height = MAP_H, color = COLOR_BORDER }, 0, 0)
-	batch:add(quad { width = 3, height = MAP_H, color = COLOR_BORDER }, MAP_W - 3, 0)
+	batch:add(quad {
+		width = MAP_W,
+		height = 3,
+		color = COLOR_BORDER
+	}, 0, 0)
+	batch:add(quad {
+		width = MAP_W,
+		height = 3,
+		color = COLOR_BORDER
+	}, 0, MAP_H - 3)
+	batch:add(quad {
+		width = 3,
+		height = MAP_H,
+		color = COLOR_BORDER
+	}, 0, 0)
+	batch:add(quad {
+		width = 3,
+		height = MAP_H,
+		color = COLOR_BORDER
+	}, MAP_W - 3, 0)
 end
 
 local function draw_stars(stars)
@@ -2871,10 +2946,10 @@ local function draw_player_trail()
 	end
 end
 
-local function draw_bullets()
+local function draw_bullet_pool(pool)
 	for i = 1, MAX_BULLETS do
-		local bullet = bullets[i]
-		if bullet.active then
+		local bullet = pool[i]
+		if bullet and bullet.active then
 			local core = bullet.homing and BULLET_HOMING_CORE or BULLET_CORE
 			local glow = bullet.homing and BULLET_HOMING_GLOW or BULLET_GLOW
 			draw_masked_circle(core, 3, bullet.x, bullet.y)
@@ -2884,10 +2959,18 @@ local function draw_bullets()
 	end
 end
 
+local function draw_bullets()
+	draw_bullet_pool(multiplayer.world_view and multiplayer.world_view.bullets or bullets)
+	if not multiplayer.host then
+		draw_bullet_pool(predicted_bullets)
+	end
+end
+
 local function draw_enemies()
+	local pool = multiplayer.world_view and multiplayer.world_view.enemies or enemies
 	for i = 1, MAX_ENEMIES do
-		local enemy = enemies[i]
-		if enemy.active then
+		local enemy = pool[i]
+		if enemy and enemy.active then
 			local def = ENEMY_DEFS[enemy.type]
 			local color = def.color
 			local glow = particle_alpha(color, 60)
@@ -3061,7 +3144,10 @@ local function draw_hud()
 	local minutes = math.floor(state.game_time / 60)
 	local seconds = math.floor(state.game_time) % 60
 	add_text(W - 100, 10, string.format("TIME %d:%02d", minutes, seconds), 8, COLOR_SKY_BLUE, "LT", 100, 8)
-	add_text(10, H - 20, string.format("LIVES: %d", state.lives), 8, COLOR_WHITE, "LT", 120, 8)
+	add_text(10, H - 20, string.format("TEAM LIVES: %d", state.lives), 8, COLOR_WHITE, "LT", 140, 8)
+	if not state.player_alive and multiplayer.other_alive() then
+		add_text(180, H - 20, "SPECTATING TEAMMATE", 8, COLOR_SKY_BLUE, "C", 440, 8)
+	end
 	add_text(W - 60, H - 20, string.format("%.0f FPS", fps), 8, COLOR_WHITE, "LT", 60, 8)
 	if state.combo > 1 then
 		local base_size = 16 + (state.combo - 2) * 2
@@ -3101,10 +3187,26 @@ local function draw_hud()
 			height = bar_h,
 			color = particle_alpha(bar_color, 200.0),
 		}, bar_x, bar_y)
-		batch:add(quad { width = bar_w, height = 1, color = bar_outline }, bar_x, bar_y)
-		batch:add(quad { width = bar_w, height = 1, color = bar_outline }, bar_x, bar_y + bar_h - 1)
-		batch:add(quad { width = 1, height = bar_h, color = bar_outline }, bar_x, bar_y)
-		batch:add(quad { width = 1, height = bar_h, color = bar_outline }, bar_x + bar_w - 1, bar_y)
+		batch:add(quad {
+			width = bar_w,
+			height = 1,
+			color = bar_outline
+		}, bar_x, bar_y)
+		batch:add(quad {
+			width = bar_w,
+			height = 1,
+			color = bar_outline
+		}, bar_x, bar_y + bar_h - 1)
+		batch:add(quad {
+			width = 1,
+			height = bar_h,
+			color = bar_outline
+		}, bar_x, bar_y)
+		batch:add(quad {
+			width = 1,
+			height = bar_h,
+			color = bar_outline
+		}, bar_x + bar_w - 1, bar_y)
 		feedback.draw_shadowed_text(W * 0.5 - #ability_name * 4, bar_y - 12, ability_name, 8, bar_color, "LT",
 			#ability_name * 8, 10, argb(80, 255, 255, 255))
 	end
@@ -3150,7 +3252,11 @@ local function draw_player()
 end
 
 local function draw_backdrop(include_border)
-	batch:add(quad { width = MAP_W, height = MAP_H, color = COLOR_BLACK }, 0, 0)
+	batch:add(quad {
+		width = MAP_W,
+		height = MAP_H,
+		color = COLOR_BLACK
+	}, 0, 0)
 	draw_stars(stars_far)
 	draw_stars(stars_near)
 	draw_grid()
@@ -3165,9 +3271,9 @@ local function draw_world()
 	powerup.draw_black_holes()
 	draw_enemies()
 	if state.player_alive then
-		if state.player_alive then draw_player() end
-	if multiplayer then multiplayer.draw_partner() end
+		multiplayer.draw_local()
 	end
+	multiplayer.draw_partner()
 	powerup.draw()
 	feedback.draw_float_texts()
 end
@@ -3247,173 +3353,378 @@ function feedback.draw_leaderboard_scene()
 	end
 end
 
--- Multiplayer integration keeps the original player, weapons, enemy AI and effects.
-local other_health
-local partner = { player = {}, health = {}, input = {}, tx = {}, ty = {}, ta = {} }
-local correction_x, correction_y = 0, 0
-local host_target
-local have_snapshot = false
-local health_keys = { "lives", "player_alive", "killed_by_type", "respawn_invincible", "respawn_timer", "shoot_timer", "trail_timer", "trail_count", "thrust_particle_timer" }
-local function copy_health(out)
-    for _, k in ipairs(health_keys) do out[k] = state[k] end
-end
-local function with_partner(fn)
-    local old_player, old_input, old_x, old_y = player, input, mouse_world_x, mouse_world_y
-    local old_tx, old_ty, old_ta = trail_x, trail_y, trail_a
-    local old_cx, old_cy, old_health = camera.x, camera.y, {}
-    copy_health(old_health)
-    player, input = partner.player, partner.input
-    trail_x, trail_y, trail_a = partner.tx, partner.ty, partner.ta
-    mouse_world_x, mouse_world_y = input.mx or player.x + 50, input.my or player.y
-    for _, k in ipairs(health_keys) do state[k] = partner.health[k] end
-    other_health = old_health
-    fn()
-    other_health = nil
-    copy_health(partner.health)
-    player, input, mouse_world_x, mouse_world_y = old_player, old_input, old_x, old_y
-    trail_x, trail_y, trail_a = old_tx, old_ty, old_ta
-    camera.x, camera.y = old_cx, old_cy
-    for _, k in ipairs(health_keys) do state[k] = old_health[k] end
-end
-local function merge(dst, src)
-    for k,v in pairs(src) do
-        if type(v)=="table" then dst[k]=dst[k] or {};merge(dst[k],v) else dst[k]=v end
-    end
-end
-local function active_pool(pool)
-    local out={}
-    for i,v in ipairs(pool) do if v.active then out[i]=v end end
-    return out
-end
-local function apply_pool(pool, data)
-    for _,v in ipairs(pool) do v.active=false end
-    for i,v in pairs(data) do merge(pool[i],v) end
-end
--- Service messages carry state values; Lua methods stay in the game service.
-local function snapshot_fields(source)
-    local values = {}
-    for key, value in pairs(source) do
-        if type(value) ~= "function" then values[key] = value end
-    end
-    return values
-end
-local online = require "online"
-multiplayer = online.new {
-    endpoint = soluna.settings().server or "wss://geometry-wars.yuchanns.xyz/ws",
-    text = add_text,
-    button = feedback.button,
-    pointer = function()
-        local scale,ox,oy=world_scale()
-        return (mouse_screen_x-ox)/scale,(mouse_screen_y-oy)/scale,input.mouse_pressed
-    end,
-    reset_partner = function()
-        correction_x, correction_y, host_target = 0, 0, nil
-        have_snapshot = false
-        partner.player = { x=MAP_W*.5+55,y=MAP_H*.5,angle=0 }
-        partner.health = { lives=MAX_LIVES,player_alive=true,killed_by_type=-1,respawn_invincible=true,respawn_timer=RESPAWN_INVINCIBLE,shoot_timer=0,trail_timer=0,trail_count=0,thrust_particle_timer=0 }
-        partner.input = { key_pressed={},ui_actions={},mouse_left=false,mx=partner.player.x+50,my=partner.player.y }
-        partner.tx,partner.ty,partner.ta={},{},{}
-    end,
-    remote_input = function(data)
-        for _,k in ipairs {"left","right","up","down","mouse_left"} do partner.input[k]=data[k]==true end
-        if type(data.mx)=="number" and type(data.my)=="number" then partner.input.mx,partner.input.my=data.mx,data.my end
-    end,
-    local_input = function()
-        return {left=input.left,right=input.right,up=input.up,down=input.down,mouse_left=input.mouse_left,mx=mouse_world_x,my=mouse_world_y}
-    end,
-    snapshot = function()
-        local host_health={};copy_health(host_health)
-        return { state=snapshot_fields(state),host_player=player,host_health=host_health,host_tx=trail_x,host_ty=trail_y,host_ta=trail_a,
-            guest=partner,enemies=active_pool(enemies),bullets=active_pool(bullets),powerup=snapshot_fields(powerup),feedback=snapshot_fields(feedback) }
-    end,
-    apply = function(data)
-        local old_x,old_y,old_angle,was_alive = player.x,player.y,player.angle,state.player_alive
-        local local_timers={shoot_timer=state.shoot_timer,trail_timer=state.trail_timer,trail_count=state.trail_count,thrust_particle_timer=state.thrust_particle_timer}
-        merge(state,data.state)
-        merge(player,data.guest.player)
-        for _,k in ipairs(health_keys) do state[k]=data.guest.health[k] end
-        -- Input advances locally each frame. Ordinary server corrections are
-        -- spread over a few frames; respawns and large corrections snap.
-        if have_snapshot and was_alive and state.player_alive and distance(old_x,old_y,player.x,player.y)<150 then
-            correction_x,correction_y=player.x-old_x,player.y-old_y
-            player.x,player.y,player.angle=old_x,old_y,old_angle
-            for k,v in pairs(local_timers) do state[k]=v end
-        else
-            correction_x,correction_y=0,0
-            trail_x,trail_y,trail_a=data.guest.tx,data.guest.ty,data.guest.ta
-        end
-        if host_target then
-            host_target={x=data.host_player.x,y=data.host_player.y,angle=data.host_player.angle,left=1/15}
-        else
-            partner.player=data.host_player
-            host_target={x=data.host_player.x,y=data.host_player.y,angle=data.host_player.angle,left=0}
-        end
-        partner.health=data.host_health
-        have_snapshot = true
-        partner.tx,partner.ty,partner.ta=data.host_tx,data.host_ty,data.host_ta
-        apply_pool(enemies,data.enemies);apply_pool(bullets,data.bullets)
-        merge(powerup,data.powerup);merge(feedback,data.feedback)
-        for _,e in ipairs(data.events or {}) do
-            if e[3]=="guest-motion" or e[3]=="guest-shot" then
-                -- Already produced by the guest's local prediction.
-            elseif e[1]=="emit" then ltask.send(particle,"emit",e[2])
-            elseif e[1]=="grid" then grid_impulse(table.unpack(e[2]))
-            elseif e[1]=="sound" then play_effect(e[2][1],e[2][2]) end
-        end
-    end,
-}
-function multiplayer.other_alive()
-    if other_health then return multiplayer.started and other_health.player_alive==true end
-    return multiplayer.started and partner.health.player_alive==true
-end
-function multiplayer.target(x,y)
-    if multiplayer.other_alive() and (not state.player_alive or distance(x,y,partner.player.x,partner.player.y)<distance(x,y,player.x,player.y)) then return partner.player end
-    return player
-end
-function multiplayer.update_partner(dt)
-    if not multiplayer.other_alive() then return end
-    with_partner(function()
-        multiplayer.effect_source="guest-motion"
-        update_player(dt)
-        multiplayer.effect_source="guest-shot"
-        update_shooting(dt)
-        multiplayer.effect_source=nil
-        if state.respawn_invincible then
-            state.respawn_timer=math.max(0,state.respawn_timer-dt)
-            state.respawn_invincible=state.respawn_timer>0
-        end
-    end)
-end
-function multiplayer.predict(dt)
-    if state.player_alive then
-        update_player(dt)
-        local factor=1-math.exp(-12*dt)
-        local dx,dy=correction_x*factor,correction_y*factor
-        player.x,player.y=clamp(player.x+dx,20,MAP_W-20),clamp(player.y+dy,20,MAP_H-20)
-        correction_x,correction_y=correction_x-dx,correction_y-dy
-        update_shooting(dt)
-    end
-    if host_target and host_target.left>0 then
-        local factor=math.min(1,dt/host_target.left)
-        partner.player.x=partner.player.x+(host_target.x-partner.player.x)*factor
-        partner.player.y=partner.player.y+(host_target.y-partner.player.y)*factor
-        local angle=(host_target.angle-partner.player.angle+math.pi)%(2*math.pi)-math.pi
-        partner.player.angle=partner.player.angle+angle*factor
-        host_target.left=math.max(0,host_target.left-dt)
-    end
-    -- Reuse the original movement and effects between authoritative snapshots.
-    -- Collisions, drops, score, deaths and spawning remain host decisions.
-    update_bullets(dt)
-    update_enemies(dt)
-    update_timers(dt)
-    powerup.update(dt)
-    feedback.update(dt)
-end
-function multiplayer.collide_partner()
-    if multiplayer.other_alive() then with_partner(update_collisions) end
-end
-function multiplayer.draw_partner()
-    if multiplayer.other_alive() then with_partner(draw_player) end
+do
+	-- Multiplayer keeps movement prediction separate from authoritative game rules.
+	local other_health
+	local partner = {
+		player = {},
+		health = {},
+		input = {},
+		tx = {},
+		ty = {},
+		ta = {}
+	}
+	local prediction, host_inputs, world_buffer
+	local render_offset_x, render_offset_y = 0, 0
+	local partner_view
+	local have_snapshot = false
+	local health_keys = {
+		"life_id",
+		"player_alive",
+		"killed_by_type",
+		"respawn_invincible",
+		"respawn_timer",
+		"shoot_timer",
+		"trail_timer",
+		"trail_count",
+		"thrust_particle_timer"
+	}
+	local world_keys = {
+		"scene",
+		"scene_time",
+		"game_time",
+		"lives",
+		"score",
+		"combo",
+		"highest_combo",
+		"total_kills",
+		"combo_timer",
+		"combo_bump_timer",
+		"spawn_timer",
+		"shake_amt",
+		"shake_frames",
+		"shake_x",
+		"shake_y",
+		"screen_shake_y",
+		"screen_shake_frames",
+		"combo5_shown",
+		"combo10_shown",
+		"kills50_shown",
+		"kills100_shown",
+		"kills200_shown"
+	}
+	local function copy_health(out)
+		for _, k in ipairs(health_keys) do
+			out[k] = state[k]
+		end
+	end
+	local function with_partner(fn)
+		local old_player, old_input, old_x, old_y = player, input, mouse_world_x, mouse_world_y
+		local old_tx, old_ty, old_ta = trail_x, trail_y, trail_a
+		local old_cx, old_cy, old_health = camera.x, camera.y, {}
+		copy_health(old_health)
+		player, input = partner.player, partner.input
+		trail_x, trail_y, trail_a = partner.tx, partner.ty, partner.ta
+		mouse_world_x, mouse_world_y = input.mx or player.x + 50, input.my or player.y
+		for _, k in ipairs(health_keys) do
+			state[k] = partner.health[k]
+		end
+		other_health = old_health
+		fn()
+		other_health = nil
+		copy_health(partner.health)
+		player, input, mouse_world_x, mouse_world_y = old_player, old_input, old_x, old_y
+		trail_x, trail_y, trail_a = old_tx, old_ty, old_ta
+		camera.x, camera.y = old_cx, old_cy
+		for _, k in ipairs(health_keys) do
+			state[k] = old_health[k]
+		end
+	end
+	local function merge(dst, src)
+		for k, v in pairs(src) do
+			if type(v) == "table" then
+				dst[k] = dst[k] or {}
+				merge(dst[k], v)
+			else
+				dst[k] = v
+			end
+		end
+	end
+	local function active_pool(pool)
+		local out = {}
+		for i, v in ipairs(pool) do
+			if v.active then
+				out[i] = v
+			end
+		end
+		return out
+	end
+	local function apply_pool(pool, data)
+		for _, v in ipairs(pool) do
+			v.active = false
+		end
+		for i, v in pairs(data) do
+			merge(pool[i], v)
+		end
+	end
+	local function snapshot_fields(source, keys)
+		local values = {}
+		if keys then
+			for _, key in ipairs(keys) do
+				values[key] = source[key]
+			end
+		else
+			for key, value in pairs(source) do
+				if type(value) ~= "function" then
+					values[key] = value
+				end
+			end
+		end
+		return values
+	end
+	local function replay_movement(value, command)
+		netcode.move(value, netcode.controls(command), command.dt,
+			{
+				speed = PLAYER_SPEED,
+				width = MAP_W,
+				height = MAP_H,
+				black_holes = powerup.black_holes
+			})
+	end
+	local online = require "online"
+	multiplayer = online.new {
+		endpoint = soluna.settings().server or "wss://geometry-wars.yuchanns.xyz/ws",
+		text = add_text,
+		button = feedback.button,
+		pointer = function()
+			local scale, ox, oy = world_scale()
+			return (mouse_screen_x - ox) / scale, (mouse_screen_y - oy) / scale, input.mouse_pressed
+		end,
+		reset_partner = function()
+			prediction, host_inputs, world_buffer = netcode.client(), netcode.host(), netcode.buffer(.1)
+			render_offset_x, render_offset_y, partner_view = 0, 0, nil
+			have_snapshot = false
+			if multiplayer.started then
+				state.lives = MAX_LIVES * 2
+			end
+			multiplayer.world_view = nil
+			predicted_bullets = {}
+			partner.player = {
+				x = MAP_W * .5 + 55,
+				y = MAP_H * .5,
+				angle = 0
+			}
+			partner.health = {
+				life_id = 0,
+				player_alive = true,
+				killed_by_type = -1,
+				respawn_invincible = true,
+				respawn_timer = RESPAWN_INVINCIBLE,
+				shoot_timer = 0,
+				trail_timer = 0,
+				trail_count = 0,
+				thrust_particle_timer = 0
+			}
+			partner.input = {
+				key_pressed = {},
+				ui_actions = {},
+				mouse_left = false,
+				mx = partner.player.x + 50,
+				my = partner.player.y
+			}
+			partner.tx, partner.ty, partner.ta = {}, {}, {}
+		end,
+		remote_input = function(data)
+			host_inputs:receive(data.commands)
+		end,
+		local_input = function()
+			return { commands = prediction.pending }
+		end,
+		snapshot = function()
+			local host_health = {}
+			copy_health(host_health)
+			return {
+				state = snapshot_fields(state, world_keys),
+				host_player = player,
+				host_health = host_health,
+				host_tx = trail_x,
+				host_ty = trail_y,
+				host_ta = trail_a,
+				guest = partner,
+				input_ack = host_inputs.ack,
+				enemies = active_pool(enemies),
+				bullets = active_pool(bullets),
+				powerup = snapshot_fields(powerup),
+				feedback = snapshot_fields(feedback)
+			}
+		end,
+		apply = function(data)
+			local old_x, old_y, was_alive, old_life = player.x + render_offset_x, player.y + render_offset_y,
+				state.player_alive, state.life_id
+			local local_timers = {
+				shoot_timer = state.shoot_timer,
+				trail_timer = state.trail_timer,
+				trail_count = state.trail_count,
+				thrust_particle_timer = state.thrust_particle_timer
+			}
+			merge(state, data.state)
+			merge(powerup, data.powerup)
+			merge(feedback, data.feedback)
+			for _, k in ipairs(health_keys) do
+				state[k] = data.guest.health[k]
+			end
+			prediction:reconcile(player, data.guest.player, data.input_ack, state.life_id, state.player_alive,
+				replay_movement)
+			if have_snapshot and was_alive and state.player_alive
+				and old_life == state.life_id
+				and distance(old_x, old_y, player.x, player.y) < 150 then
+				-- Correct simulation immediately; smooth only its displayed position.
+				render_offset_x, render_offset_y = old_x - player.x, old_y - player.y
+				for k, v in pairs(local_timers) do
+					state[k] = v
+				end
+			else
+				render_offset_x, render_offset_y = 0, 0
+				trail_x, trail_y, trail_a = data.guest.tx, data.guest.ty, data.guest.ta
+				predicted_bullets = {}
+				if state.player_alive then
+					camera.x = clamp(player.x - W * .5, 0, MAP_W - W)
+					camera.y = clamp(player.y - H * .5, 0, MAP_H - H)
+				end
+			end
+			merge(partner.player, data.host_player)
+			partner.health = data.host_health
+			partner.tx, partner.ty, partner.ta = data.host_tx, data.host_ty, data.host_ta
+			apply_pool(enemies, data.enemies)
+			apply_pool(bullets, data.bullets)
+			world_buffer:push(data.time, data.host_player, data.host_health.life_id, data.enemies, data.bullets,
+				data.input_ack)
+			have_snapshot = true
+			for _, e in ipairs(data.events or {}) do
+				if e[3] == "guest-motion" or e[3] == "guest-shot" then
+					-- Produced locally once, never again when replaying input.
+				elseif e[1] == "emit" then
+					ltask.send(particle, "emit", e[2])
+				elseif e[1] == "grid" then
+					grid_impulse(table.unpack(e[2]))
+				elseif e[1] == "sound" then
+					play_effect(e[2][1], e[2][2])
+				end
+			end
+		end,
+	}
+	function multiplayer.other_alive()
+		if other_health then
+			return multiplayer.started and other_health.player_alive == true
+		end
+		return multiplayer.started and partner.health.player_alive == true
+	end
+
+	function multiplayer.target(x, y)
+		if multiplayer.other_alive()
+			and (not state.player_alive
+				or distance(x, y, partner.player.x, partner.player.y) < distance(x, y, player.x, player.y)) then
+			return partner.player
+		end
+		return player
+	end
+
+	function multiplayer.update_partner(dt)
+		with_partner(function()
+			host_inputs:process(dt, state.life_id, state.player_alive, function(command)
+				netcode.controls(command, input)
+				mouse_world_x, mouse_world_y = input.mx, input.my
+				multiplayer.effect_source = "guest-motion"
+				update_player(command.dt)
+				multiplayer.effect_source = "guest-shot"
+				update_shooting(command.dt)
+			end)
+			multiplayer.effect_source = nil
+			if state.respawn_invincible then
+				state.respawn_timer = math.max(0, state.respawn_timer - dt)
+				state.respawn_invincible = state.respawn_timer > 0
+			end
+		end)
+		if not partner_view or partner_view.life_id ~= partner.health.life_id then
+			partner_view = {
+				x = partner.player.x,
+				y = partner.player.y,
+				angle = partner.player.angle,
+				life_id = partner.health.life_id
+			}
+		else
+			local factor = 1 - math.exp(-20 * dt)
+			partner_view.x = partner_view.x + (partner.player.x - partner_view.x) * factor
+			partner_view.y = partner_view.y + (partner.player.y - partner_view.y) * factor
+			local angle = (partner.player.angle - partner_view.angle + math.pi) % (2 * math.pi) - math.pi
+			partner_view.angle = partner_view.angle + angle * factor
+		end
+	end
+
+	function multiplayer.predict(dt)
+		if state.player_alive then
+			local command = prediction:record(
+				{
+					left = input.left,
+					right = input.right,
+					up = input.up,
+					down = input.down,
+					mouse_left = input.mouse_left,
+					mx = mouse_world_x,
+					my = mouse_world_y
+				}, dt, state.life_id)
+			if command then
+				multiplayer.input_seq = command.seq
+				update_player(dt)
+				update_shooting(dt)
+			end
+		end
+		local factor = math.exp(-20 * dt)
+		render_offset_x, render_offset_y = render_offset_x * factor, render_offset_y * factor
+		multiplayer.world_view = world_buffer:advance(dt)
+		if multiplayer.world_view then
+			for _, bullet in ipairs(predicted_bullets) do
+				if bullet.input_seq <= multiplayer.world_view.ack then
+					bullet.active = false
+				end
+			end
+		end
+		update_bullets(dt, predicted_bullets)
+		update_timers(dt)
+		powerup.update(dt)
+		feedback.update(dt)
+	end
+
+	function multiplayer.collide_partner()
+		if multiplayer.other_alive() then
+			with_partner(update_collisions)
+		end
+	end
+
+	local function draw_at(position)
+		local x, y, angle = player.x, player.y, player.angle
+		if position then
+			player.x, player.y, player.angle = position.x, position.y, position.angle
+		end
+		draw_player()
+		player.x, player.y, player.angle = x, y, angle
+	end
+	function multiplayer.draw_local()
+		draw_at {
+			x = player.x + render_offset_x,
+			y = player.y + render_offset_y,
+			angle = player.angle
+		}
+	end
+
+	function multiplayer.draw_partner()
+		if multiplayer.other_alive() then
+			with_partner(function()
+				draw_at(multiplayer.world_view and multiplayer.world_view.host or partner_view)
+			end)
+		end
+	end
+
+	function multiplayer.camera_target()
+		if state.player_alive then
+			return player.x + render_offset_x, player.y + render_offset_y
+		end
+		if multiplayer.other_alive() then
+			local value = multiplayer.world_view and multiplayer.world_view.host or partner_view or partner.player
+			return value.x, value.y
+		end
+		return player.x, player.y
+	end
 end
 
 do
@@ -3427,7 +3738,10 @@ do
 			update_grid(dt)
 			return
 		end
-		if state.player_alive then update_player(dt); update_shooting(dt) end
+		if state.player_alive then
+			update_player(dt)
+			update_shooting(dt)
+		end
 		multiplayer.update_partner(dt)
 		update_bullets(dt)
 		update_enemies(dt)
@@ -3494,9 +3808,21 @@ do
 			current = "initializing"
 		end
 
-		batch:add(quad { width = W, height = H, color = COLOR_BLACK }, 0, 0)
-		batch:add(quad { width = 220, height = 2, color = argb(pulse, 0, 255, 255) }, W // 2 - 110, H // 2 - 22)
-		batch:add(quad { width = 160, height = 2, color = argb(120, 255, 255, 255) }, W // 2 - 80, H // 2 - 8)
+		batch:add(quad {
+			width = W,
+			height = H,
+			color = COLOR_BLACK
+		}, 0, 0)
+		batch:add(quad {
+			width = 220,
+			height = 2,
+			color = argb(pulse, 0, 255, 255)
+		}, W // 2 - 110, H // 2 - 22)
+		batch:add(quad {
+			width = 160,
+			height = 2,
+			color = argb(120, 255, 255, 255)
+		}, W // 2 - 80, H // 2 - 8)
 		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 - 82, "GEOMETRY WARS", 16, COLOR_CYAN,
 			"CV", W, 20)
 		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 + 12, "LOADING SPRITES", 8,
@@ -3504,14 +3830,38 @@ do
 		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 + 26,
 			string.format("%3d%%  %s", percent, current), 8, argb(180, 180, 220, 255), "CV", W, 10)
 
-		batch:add(quad { width = bar_w, height = bar_h, color = argb(120, 20, 40, 60) }, bar_x, bar_y)
+		batch:add(quad {
+			width = bar_w,
+			height = bar_h,
+			color = argb(120, 20, 40, 60)
+		}, bar_x, bar_y)
 		if fill_w > 0 then
-			batch:add(quad { width = fill_w, height = bar_h - 4, color = argb(220, 0, 255, 255) }, bar_x + 2, bar_y + 2)
+			batch:add(quad {
+				width = fill_w,
+				height = bar_h - 4,
+				color = argb(220, 0, 255, 255)
+			}, bar_x + 2, bar_y + 2)
 		end
-		batch:add(quad { width = bar_w, height = 1, color = COLOR_CYAN }, bar_x, bar_y)
-		batch:add(quad { width = bar_w, height = 1, color = COLOR_CYAN }, bar_x, bar_y + bar_h - 1)
-		batch:add(quad { width = 1, height = bar_h, color = COLOR_CYAN }, bar_x, bar_y)
-		batch:add(quad { width = 1, height = bar_h, color = COLOR_CYAN }, bar_x + bar_w - 1, bar_y)
+		batch:add(quad {
+			width = bar_w,
+			height = 1,
+			color = COLOR_CYAN
+		}, bar_x, bar_y)
+		batch:add(quad {
+			width = bar_w,
+			height = 1,
+			color = COLOR_CYAN
+		}, bar_x, bar_y + bar_h - 1)
+		batch:add(quad {
+			width = 1,
+			height = bar_h,
+			color = COLOR_CYAN
+		}, bar_x, bar_y)
+		batch:add(quad {
+			width = 1,
+			height = bar_h,
+			color = COLOR_CYAN
+		}, bar_x + bar_w - 1, bar_y)
 	end
 
 	local function draw_title_world()
@@ -3535,7 +3885,11 @@ do
 	local function draw_death_overlay()
 		if state.scene_time < 0.5 then
 			local alpha = clamp((0.5 - state.scene_time) * 400.0, 0, 255)
-			batch:add(quad { width = W, height = H, color = argb(math.floor(alpha + 0.5), 255, 255, 255) }, 0, 0)
+			batch:add(quad {
+				width = W,
+				height = H,
+				color = argb(math.floor(alpha + 0.5), 255, 255, 255)
+			}, 0, 0)
 		end
 	end
 
@@ -3601,11 +3955,13 @@ do
 	end
 
 	function game.online()
-        state.center_camera()
+		state.center_camera()
 		state.set_scene_hooks(draw_title_world, multiplayer.draw)
 		while true do
-			if multiplayer.started then return "reset" end
-            update_title_scene(state.frame_dt)
+			if multiplayer.started then
+				return "reset"
+			end
+			update_title_scene(state.frame_dt)
 			flow.sleep(0)
 		end
 	end
@@ -3628,7 +3984,9 @@ do
 	function game.combat()
 		state.set_scene_hooks(draw_world, draw_combat_overlay)
 		while true do
-			if not multiplayer.started then return "online" end
+			if not multiplayer.started then
+				return "online"
+			end
 			handle_combat_debug_keys()
 			update_combat_scene(state.frame_dt)
 			if not state.player_alive and state.lives <= 0 and not multiplayer.other_alive() then
@@ -3641,7 +3999,9 @@ do
 	function game.death()
 		state.set_scene_hooks(draw_death_world, draw_death_overlay)
 		while true do
-            if not multiplayer.started then return "online" end
+			if not multiplayer.started then
+				return "online"
+			end
 			update_death_scene(state.frame_dt)
 			if state.scene_time > 1.5 then
 				state.lb_highlight = state.insert_leaderboard(state.score, state.game_time, state.total_kills,
@@ -3662,9 +4022,11 @@ do
 	function game.over()
 		state.set_scene_hooks(draw_game_over_world, draw_game_over_overlay)
 		while true do
-            if not multiplayer.started then return "online" end
+			if not multiplayer.started then
+				return "online"
+			end
 			if state.scene_time > 2.0 and confirm_requested() then
-                multiplayer.finish()
+				multiplayer.finish()
 				return "online"
 			end
 			update_game_over_scene(state.frame_dt)
@@ -3713,7 +4075,7 @@ function callback.frame()
 	state.total_time = state.total_time + dt
 	state.scene_time = state.scene_time + dt
 	state.frame_dt = dt
-	multiplayer.poll(now / 100)
+	multiplayer.poll()
 	local current_scene = flow.update()
 	if current_scene ~= nil then
 		state.sync_scene(current_scene)
@@ -3722,7 +4084,11 @@ function callback.frame()
 	sync_particle_service_frame(dt)
 
 	view.begin(batch)
-	batch:add(quad { width = W, height = H, color = COLOR_BLACK }, 0, 0)
+	batch:add(quad {
+		width = W,
+		height = H,
+		color = COLOR_BLACK
+	}, 0, 0)
 
 	batch:layer(0, state.screen_shake_y)
 	batch:layer(-camera.x + state.shake_x, -camera.y + state.shake_y)

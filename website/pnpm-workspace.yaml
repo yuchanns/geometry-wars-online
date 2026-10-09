@@ -1,0 +1,16 @@
+minimumReleaseAgeExcludePrune: true
+minimumReleaseAgeExclude:
+  - miniflare@5.20261006.1-alpha
+  - wrangler@4.149.0
+
+trustPolicy: no-downgrade
+shellEmulator: true
+
+# Keep JavaScript unused-variable checking compatible with the default parser.
+overrides:
+  '@typescript-eslint/eslint-plugin': 8.68.0
+  '@typescript-eslint/parser': 8.68.0
+
+allowBuilds:
+  esbuild: true
+  workerd: true

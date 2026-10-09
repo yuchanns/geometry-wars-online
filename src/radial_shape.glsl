@@ -1,5 +1,5 @@
 @vs vs
-layout(binding=0) uniform vs_params {
+layout(binding = 0) uniform vs_params {
 	vec2 framesize;
 	float texsize;
 };
@@ -22,8 +22,12 @@ float unpack_len12(uint value) {
 	return float(value & 0xfffu) * 0.125;
 }
 
-struct sr_mat { mat2 m; };
-layout(binding=0) readonly buffer sr_lut { sr_mat sr[]; };
+struct sr_mat {
+	mat2 m;
+};
+layout(binding = 0) readonly buffer sr_lut {
+	sr_mat sr[];
+};
 
 void main() {
 	uint index = uint(gl_VertexIndex);

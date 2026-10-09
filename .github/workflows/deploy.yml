@@ -16,22 +16,30 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: website/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
       - uses: emscripten-core/setup-emsdk@v16
         with:
           version: 4.0.16
           actions-cache-folder: emsdk-cache
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
       - run: pnpm run check
       - name: Build browser client
+        working-directory: .
         run: |
           chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
           ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
@@ -58,16 +66,22 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
     environment:
       name: production
       url: https://geometry-wars.yuchanns.xyz/
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: website/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@v8
         with:
