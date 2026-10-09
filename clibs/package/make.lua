@@ -6,7 +6,7 @@ local basedir = fs.path(tostring(lm.basedir))
 local destination = lm.web and "dist/web" or "dist/native"
 local outputs = {}
 if lm.web then
-    outputs = { destination .. "/index.html", destination .. "/runtime/soluna.js",
+    outputs = { destination .. "/main.zip", destination .. "/client.js", destination .. "/style.css", destination .. "/_headers", destination .. "/runtime/soluna.js",
         destination .. "/runtime/soluna.wasm", destination .. "/runtime/websocket.wasm" }
 else
     outputs = { destination .. (lm.os == "windows" and "/soluna.exe" or "/soluna"),
@@ -24,7 +24,7 @@ else
 end
 lm:runlua "client" {
     script = "clibs/package/package.lua", deps = { "soluna", "websocket" },
-    inputs = { "game/**/*", "!game/manifest.json", "web/index.html" },
+    inputs = { "game/**/*", "!game/manifest.json", "web/client.js", "web/style.css", "web/_headers" },
     outputs = outputs,
     args = { lm.web and "web" or "native", lm.bindir, destination, lm.os },
 }

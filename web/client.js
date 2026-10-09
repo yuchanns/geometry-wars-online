@@ -1,20 +1,4 @@
-<!doctype html>
-<html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Geometry Wars</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #10141e; color: #a1aebe; font: 13px system-ui, sans-serif; }
-  main { display: grid; place-items: center; min-height: 100dvh; padding: 12px; }
-  canvas { display: block; width: min(calc(100vw - 24px), calc((100dvh - 24px) * 4 / 3), 1080px); height: auto; aspect-ratio: 1080 / 810; outline: none; touch-action: none; }
-  #status { position: fixed; top: 10px; left: 16px; margin: 0; z-index: 1; }
-  #status[hidden] { display: none; }
-</style>
-<main><canvas id="canvas" width="1080" height="810" tabindex="0" aria-label="Geometry Wars. WASD to move; mouse to aim and shoot."></canvas></main>
-<p id="status" role="status">Loading Soluna…</p>
-<script type="module">
-  const status = document.querySelector('#status');
+const status = document.querySelector('#status');
   const canvas = document.querySelector('#canvas');
   canvas.addEventListener('pointerdown', () => canvas.focus());
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
@@ -28,18 +12,32 @@
     if (!crossOriginIsolated) throw new Error('This server must send COOP/COEP headers for Soluna WASM threads.');
     if (!navigator.gpu) throw new Error('Soluna requires a browser with WebGPU support.');
     const { default: createApp } = await import('./runtime/soluna.js');
-    const paths = [...await (await fetch('/game/manifest.json')).json(), '/runtime/websocket.wasm'];
-    const files = await Promise.all(paths.map(async (path) => {
-      const response = await fetch(path);
-      if (!response.ok) throw new Error(`Could not load ${path}`);
-      return [path, new Uint8Array(await response.arrayBuffer())];
-    }));
+    const archiveResponse = await fetch('/main.zip');
+    if (!archiveResponse.ok) throw new Error('Could not load main.zip');
+    const total = Number(archiveResponse.headers.get('Content-Length'));
+    const reader = archiveResponse.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      status.textContent = total ? `Loading game… ${Math.min(100, Math.round(loaded / total * 100))}%` : `Loading game… ${(loaded / 1048576).toFixed(1)} MB`;
+    }
+    const archive = new Uint8Array(loaded);
+    let offset = 0;
+    for (const chunk of chunks) { archive.set(chunk, offset); offset += chunk.length; }
+    const socketResponse = await fetch('/runtime/websocket.wasm');
+    if (!socketResponse.ok) throw new Error('Could not load websocket.wasm');
+    const files = [['/main.zip', archive], ['/runtime/websocket.wasm', new Uint8Array(await socketResponse.arrayBuffer())]];
+    status.textContent = 'Starting game…';
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const endpoint = new URLSearchParams(location.search).get('server') || `${scheme}//${location.hostname}:8788/ws`;
+    const endpoint = new URLSearchParams(location.search).get('server') || `${scheme}//${location.host}/ws`;
     if (!/^wss?:\/\//.test(endpoint)) throw new Error('Expected a ws:// or wss:// server URL.');
     window.geometryWarsApp = await createApp({
       canvas,
-      arguments: ['/game/main.game', 'cpath=/runtime/?.wasm', `server=${endpoint}`],
+      arguments: ['zipfile=/main.zip', 'cpath=/runtime/?.wasm', `server=${endpoint}`],
       locateFile: (path) => new URL(`./runtime/${path}`, location.href).href,
       print: log,
       printErr: (message) => { log(message); console.error(message); },
@@ -57,5 +55,3 @@
     status.textContent = error.message;
     console.error(error);
   }
-</script>
-</html>

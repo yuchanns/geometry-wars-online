@@ -11,8 +11,5 @@ lm:conf { c = "c11", cxx = "c++20" }
 
 lm:import "clibs/soluna/make.lua"
 lm:import "clibs/websocket/make.lua"
-if not lm.web and (lm.os == "linux" or lm.os == "macos") then
-    lm:import "clibs/skynet/make.lua"
-end
 lm:import "clibs/package/make.lua"
-lm:default(lm:has "skynet" and { "client", "skynet" } or "client")
+lm:default "client"

@@ -1,4 +1,5 @@
 local fs = require "bee.filesystem"
+local subprocess = require "bee.subprocess"
 local kind, bindir, destination, host = ...
 bindir, destination = fs.path(bindir), fs.path(destination)
 
@@ -60,7 +61,18 @@ else
         end
     end
     copy(bindir / "websocket.wasm", runtime / "websocket.wasm")
-    copy(fs.path "web/index.html", destination / "index.html")
+    for _, name in ipairs { "client.js", "style.css", "_headers" } do
+        copy(fs.path("web/" .. name), destination / name)
+    end
+    -- Soluna mounts this archive directly, avoiding a request for each game file.
+    local args = { "zip", "-q", "-9", "-X", (fs.current_path() / destination / "main.zip"):string() }
+    for _, path in ipairs(files) do args[#args + 1] = path:sub(6) end
+    local process = assert(subprocess.spawn {
+        args, cwd = "game", searchPath = true, stdout = io.stdout, stderr = io.stderr,
+    })
+    local code = process:wait()
+    process:detach()
+    assert(code == 0, "Unable to build main.zip; install the zip command")
     -- Match the WebGPU glue fixes in the pinned engine's release action.
     local patches = {
         { "setBindGroup(groupIndex,group,(growMemViews(),HEAPU32),dynamicOffsetsPtr>>2,dynamicOffsetCount)",

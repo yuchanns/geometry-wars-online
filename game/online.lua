@@ -1,53 +1,75 @@
-local websocket = require "ext.websocket"
-local codec = require "net_codec"
+local ltask = require "ltask"
 local M = {}
 function M.new(ctx)
     local net = { host=false, started=false, room=nil, rooms={}, selected=1, page=1, error="", connected=false, events={} }
-    local socket, retry, sent, received = nil,0,0,0
-    local function send(kind,body)
-        if socket and socket:status()=="open" then return socket:send(string.char(kind)..codec.encode(body)) end
+    local network = ltask.uniqueservice "geometry_wars/network"
+    local inbox
+    local pending_send = false
+    local sent, received = 0, 0
+    -- Acknowledge only after the frame consumes this batch, bounding the inbox.
+    ltask.dispatch {
+        _network_update = function(state, reason, messages)
+            inbox = {state=state, reason=reason, messages=messages}
+        end,
+        _network_sent = function() pending_send = false end,
+    }
+    local function send(kind, body, frame)
+        if not net.connected then return false end
+        ltask.send(network, "send", kind, body, frame)
+        return true
     end
     function net.record(kind,body)
         if net.host and net.started then net.events[#net.events+1]={kind,body,net.effect_source} end
     end
     function net.connect()
-        if socket then socket:close() end
-        socket=websocket.connect(ctx.endpoint,string.char(2,3));net.connected=false;net.room=nil;net.started=false
+        net.connected=false;net.room=nil;net.started=false;pending_send=false
+        ltask.send(network, "connect", ltask.self(), ctx.endpoint)
         print("Connecting: "..ctx.endpoint)
     end
     function net.poll(time)
-        local state,reason=socket:status()
-        if not net.connected and state=="open" then net.error="" end
-        net.connected=state=="open"
-        if state=="closed" then
-            net.started=false;net.error=reason
-            if time>=retry then retry=time+2;net.connect() end
-            return
-        end
-        for _,data in ipairs(socket:poll()) do
-            local ok,err=pcall(function()
-                local kind=data:byte(1);local body=codec.decode(data:sub(2))
-                if kind==32 then
-                    net.rooms=body;net.selected=math.min(math.max(1,#body),net.selected)
-                    net.page=math.min(net.page,math.max(1,math.ceil(#body/7)))
-                elseif kind==33 then
-                    if body.count==0 then net.room=nil;net.started=false else net.room=body;net.host=body.host;net.started=body.started end
-                elseif kind==34 then net.host=body.host;net.started=true;net.error="";ctx.reset_partner();print("Room started / "..(net.host and "host" or "guest"))
-                elseif kind==35 then net.error=body
-                elseif kind==2 and net.host then received=time;ctx.remote_input(body)
-                elseif kind==3 and not net.host then received=time;ctx.apply(body)
+        local batch = inbox
+        if batch then
+            inbox = nil
+            local state, reason = batch.state, batch.reason
+            if not net.connected and state=="open" then net.error="" end
+            net.connected=state=="open"
+            if state=="closed" then
+                net.started=false;net.room=nil;net.error=reason or "";pending_send=false
+                net.events={}
+            else
+                for _, message in ipairs(batch.messages) do
+                    local ok,err=pcall(function()
+                        local kind,body=message[1],message[2]
+                        if kind==32 then
+                            net.rooms=body;net.selected=math.min(math.max(1,#body),net.selected)
+                            net.page=math.min(net.page,math.max(1,math.ceil(#body/7)))
+                        elseif kind==33 then
+                            if body.count==0 then net.room=nil;net.started=false else net.room=body;net.host=body.host;net.started=body.started end
+                        elseif kind==34 then net.host=body.host;net.started=true;net.error="";ctx.reset_partner();print("Room started / "..(net.host and "host" or "guest"))
+                        elseif kind==35 then net.error=body
+                        elseif kind==36 then
+                            net.room=nil;net.started=false;pending_send=false;net.events={}
+                        elseif kind==2 and net.host then received=time;ctx.remote_input(body)
+                        elseif kind==3 and not net.host then received=time;ctx.apply(body)
+                        end
+                    end)
+                    if not ok then
+                        net.error=tostring(err);print(err)
+                        ltask.send(network, "close", net.error)
+                        break
+                    end
                 end
-            end)
-            if not ok then net.error=tostring(err);print(err);socket:close() end
+            end
+            ltask.send(network, "received")
         end
         if net.started and net.host and time-received>.5 then ctx.remote_input({}) end
     end
     function net.publish(time)
-        if not net.started or time-sent<1/15 then return end
+        if not net.started or pending_send or time-sent<1/15 then return end
         if net.host then
             local snapshot=ctx.snapshot();snapshot.events=net.events
-            if send(3,snapshot) then net.events={};sent=time end
-        elseif send(2,ctx.local_input()) then sent=time end
+            if send(3,snapshot,true) then net.events={};pending_send=true;sent=time end
+        elseif send(2,ctx.local_input(),true) then pending_send=true;sent=time end
     end
     function net.create() send(17,{}) end
     function net.join() local r=net.rooms[net.selected];if r then send(18,r.id) end end

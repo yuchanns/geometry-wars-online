@@ -11,9 +11,12 @@
   material registration originate in the same example project. They have been
   adapted for Soluna's current material API, retaining the original fragment
   shader and shape data format.
-- `3rd/soluna/` and `3rd/skynet/` are pinned upstream submodules. Their licenses,
-  and those of their own dependencies, are retained in those submodules.
-- The `ws` npm package is used by the room integration test and retains its MIT
+- `3rd/soluna/` is a pinned upstream submodule. Its license,
+  and those of its dependencies, are retained in the submodule.
+- The `ws` package is used by the room integration test and retains its MIT
   license in the installed dependency.
+
+- The Worker uses Hono under MIT and Cloudflare Wrangler under Apache-2.0;
+  their licenses are retained in the installed dependencies.
 
 The root `LICENSE` retains the example project's Apache-2.0 license.

@@ -1,0 +1,79 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: geometry-wars-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: 4.0.16
+          actions-cache-folder: emsdk-cache
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - name: Build browser client
+        run: |
+          chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
+          ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
+      - name: Test local Worker rooms
+        shell: bash
+        run: |
+          pnpm start > worker.log 2>&1 &
+          worker_pid=$!
+          trap 'kill "$worker_pid" || true' EXIT
+          for attempt in {1..60}; do
+            if curl --fail --silent http://localhost:8789/ > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          pnpm run test
+      - uses: actions/upload-artifact@v7
+        with:
+          name: browser-client
+          path: dist/web
+          include-hidden-files: true
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://geometry-wars.yuchanns.xyz/
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          name: browser-client
+          path: dist/web
+      - name: Deploy Worker and assets
+        run: pnpm run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

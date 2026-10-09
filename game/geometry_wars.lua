@@ -3289,9 +3289,17 @@ local function apply_pool(pool, data)
     for _,v in ipairs(pool) do v.active=false end
     for i,v in pairs(data) do merge(pool[i],v) end
 end
+-- Service messages carry state values; Lua methods stay in the game service.
+local function snapshot_fields(source)
+    local values = {}
+    for key, value in pairs(source) do
+        if type(value) ~= "function" then values[key] = value end
+    end
+    return values
+end
 local online = require "online"
 multiplayer = online.new {
-    endpoint = soluna.settings().server or "ws://127.0.0.1:8788/ws",
+    endpoint = soluna.settings().server or "wss://geometry-wars.yuchanns.xyz/ws",
     text = add_text,
     button = feedback.button,
     pointer = function()
@@ -3315,8 +3323,8 @@ multiplayer = online.new {
     end,
     snapshot = function()
         local host_health={};copy_health(host_health)
-        return { state=state,host_player=player,host_health=host_health,host_tx=trail_x,host_ty=trail_y,host_ta=trail_a,
-            guest=partner,enemies=active_pool(enemies),bullets=active_pool(bullets),powerup=powerup,feedback=feedback }
+        return { state=snapshot_fields(state),host_player=player,host_health=host_health,host_tx=trail_x,host_ty=trail_y,host_ta=trail_a,
+            guest=partner,enemies=active_pool(enemies),bullets=active_pool(bullets),powerup=snapshot_fields(powerup),feedback=snapshot_fields(feedback) }
     end,
     apply = function(data)
         local old_x,old_y,old_angle,was_alive = player.x,player.y,player.angle,state.player_alive

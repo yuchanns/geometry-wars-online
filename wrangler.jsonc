@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "geometry-wars",
+  "main": "worker/index.tsx",
+  "compatibility_date": "2026-10-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "4fd35fa9c314ee49502c0cc22ac3ab88",
+  "routes": [{"pattern": "geometry-wars.yuchanns.xyz", "custom_domain": true}],
+  "assets": {"directory": "./dist/web", "binding": "ASSETS", "run_worker_first": ["/", "/ws"]},
+  "durable_objects": {"bindings": [
+    {"name": "LOBBY", "class_name": "Lobby"},
+    {"name": "ROOM", "class_name": "Room"}
+  ]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["Lobby", "Room"]}],
+  "observability": {"enabled": true, "head_sampling_rate": 0.1}
+}
