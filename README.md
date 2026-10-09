@@ -20,12 +20,13 @@ cd dist/native
 ./soluna game/main.game 'cpath=./?.so'
 ```
 
-For the browser client and local Worker, activate Emscripten and install `zip`, then run from the repository root:
+For the browser client and local Worker, activate Emscripten and run from the repository root:
 
 ```sh
 ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
 cd website
 pnpm install
+pnpm run build
 pnpm start
 ```
 
