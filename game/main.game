@@ -1,0 +1,11 @@
+entry : geometry_wars.lua
+service_path : "./?.lua;service/?.lua"
+extlua_entry : extlua_init
+extlua_preload : websocket
+extlua_material : radial_shape
+extlua_material_path : "extlua/material/?.lua"
+width : 800
+height : 600
+window_title : "Geometry Wars"
+background : 0xff000000
+high_dpi : true

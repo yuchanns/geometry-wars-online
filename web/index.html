@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geometry Wars</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #10141e; color: #a1aebe; font: 13px system-ui, sans-serif; }
+  main { display: grid; place-items: center; min-height: 100dvh; padding: 12px; }
+  canvas { display: block; width: min(calc(100vw - 24px), calc((100dvh - 24px) * 4 / 3), 1080px); height: auto; aspect-ratio: 1080 / 810; outline: none; touch-action: none; }
+  #status { position: fixed; top: 10px; left: 16px; margin: 0; z-index: 1; }
+  #status[hidden] { display: none; }
+</style>
+<main><canvas id="canvas" width="1080" height="810" tabindex="0" aria-label="Geometry Wars. WASD to move; mouse to aim and shoot."></canvas></main>
+<p id="status" role="status">Loading Soluna…</p>
+<script type="module">
+  const status = document.querySelector('#status');
+  const canvas = document.querySelector('#canvas');
+  canvas.addEventListener('pointerdown', () => canvas.focus());
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  window.geometryWarsLog = [];
+  function log(message) {
+    console.log(message);
+    window.geometryWarsLog.push(message);
+    if (window.geometryWarsLog.length > 80) window.geometryWarsLog.shift();
+  }
+  try {
+    if (!crossOriginIsolated) throw new Error('This server must send COOP/COEP headers for Soluna WASM threads.');
+    if (!navigator.gpu) throw new Error('Soluna requires a browser with WebGPU support.');
+    const { default: createApp } = await import('./runtime/soluna.js');
+    const paths = [...await (await fetch('/game/manifest.json')).json(), '/runtime/websocket.wasm'];
+    const files = await Promise.all(paths.map(async (path) => {
+      const response = await fetch(path);
+      if (!response.ok) throw new Error(`Could not load ${path}`);
+      return [path, new Uint8Array(await response.arrayBuffer())];
+    }));
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const endpoint = new URLSearchParams(location.search).get('server') || `${scheme}//${location.hostname}:8788/ws`;
+    if (!/^wss?:\/\//.test(endpoint)) throw new Error('Expected a ws:// or wss:// server URL.');
+    window.geometryWarsApp = await createApp({
+      canvas,
+      arguments: ['/game/main.game', 'cpath=/runtime/?.wasm', `server=${endpoint}`],
+      locateFile: (path) => new URL(`./runtime/${path}`, location.href).href,
+      print: log,
+      printErr: (message) => { log(message); console.error(message); },
+      preRun: [(module) => {
+        for (const [path, data] of files) {
+          module.FS_createPath('/', path.slice(1, path.lastIndexOf('/')), true, true);
+          module.FS.writeFile(path, data);
+        }
+      }],
+      onAbort: (reason) => { status.hidden = false; status.textContent = `Soluna stopped: ${reason}`; },
+    });
+    status.hidden = true;
+    canvas.focus();
+  } catch (error) {
+    status.textContent = error.message;
+    console.error(error);
+  }
+</script>
+</html>
