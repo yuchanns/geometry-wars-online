@@ -21,13 +21,14 @@ cd dist/native
 ./soluna game/main.game 'cpath=./?.so'
 ```
 
-For the browser client, activate Emscripten and use the Soluna JS/WASM files built by its official action:
+For the browser client and local Worker, activate Emscripten and run from the repository root:
 
 ```sh
+(cd 3rd/soluna && ./bin/luamake-bin/bin/linux/luamake -mode release -compiler emcc)
 ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -mode release -compiler emcc
 cd website
 pnpm install
-SOLUNA_JS_PATH=/path/to/soluna.js SOLUNA_WASM_PATH=/path/to/soluna.wasm pnpm run build
+pnpm run build
 pnpm start
 ```
 
