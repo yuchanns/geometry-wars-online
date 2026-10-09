@@ -1,5 +1,6 @@
 /build/
 /bin/
+/src/bin/
 /dist/
 node_modules/
 __pycache__/

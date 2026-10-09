@@ -38,7 +38,9 @@ fs.create_directories(destination)
 if kind == "native" then
 	local exe = host == "windows" and "soluna.exe" or "soluna"
 	local module = host == "windows" and "websocket.dll" or "websocket.so"
-	copy(bindir / exe, destination / exe)
+	local platform = host == "windows" and "msvc" or host
+	local engine = os.getenv "SOLUNA_PATH" or ("3rd/soluna/bin/" .. platform .. "/release/" .. exe)
+	copy(fs.path(engine), destination / exe)
 	copy(bindir / module, destination / module)
 	for _, path in ipairs(files) do
 		copy(fs.path(path), destination / path)
@@ -46,12 +48,11 @@ if kind == "native" then
 else
 	local runtime = destination / "runtime"
 	fs.create_directories(runtime)
-	for path in fs.pairs(bindir) do
-		if fs.is_regular_file(path) and path:filename():string():match "^soluna%." then
-			copy(path, runtime / path:filename())
-		end
-	end
-	copy(bindir / "websocket.wasm", runtime / "websocket.wasm")
+	local engine = fs.path "3rd/soluna/bin/emcc/release"
+	copy(fs.path(os.getenv "SOLUNA_JS_PATH" or tostring(engine / "soluna.js")), runtime / "soluna.js")
+	copy(fs.path(os.getenv "SOLUNA_WASM_PATH" or tostring(engine / "soluna.wasm")), runtime / "soluna.wasm")
+	local extensions = fs.path(os.getenv "EXTLUA_BIN_DIR" or tostring(bindir))
+	copy(extensions / "websocket.wasm", runtime / "websocket.wasm")
 	for _, name in ipairs { "client.js", "style.css", "_headers" } do
 		copy(fs.path("website/public/" .. name), destination / name)
 	end

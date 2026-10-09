@@ -5,11 +5,10 @@ lm:required_version "1.11"
 lm.basedir = fs.current_path()
 lm.web = lm.compiler == "emcc"
 lm.builddir = lm.web and "build/web" or "build/native"
-lm.bindir = lm.web and "bin/web" or "bin/native"
+lm.bindir = "src/bin"
 lm.outputdir = lm.basedir / lm.builddir
-lm:conf { c = "c11", cxx = "c++20" }
+lm:conf { c = "c11", cxx = "c++20", emcc = { c = "gnu11" } }
 
-lm:import "clibs/soluna/make.lua"
 lm:import "clibs/websocket/make.lua"
 lm:import "clibs/package/make.lua"
 lm:default "client"

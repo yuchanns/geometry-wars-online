@@ -31,18 +31,29 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: website/pnpm-lock.yaml
-      - uses: emscripten-core/setup-emsdk@v16
+      - name: Build Soluna runtime
+        uses: ./3rd/soluna/.github/actions/soluna
+        id: soluna
         with:
-          version: 4.0.16
-          actions-cache-folder: emsdk-cache
+          soluna_path: 3rd/soluna
+      - name: Build WebSocket extension
+        uses: yuchanns/soluna_examples/.github/workflows/actions/extlua@9eea5b9fd1b77d5b81f04bf50eba36691d2e5ce9
+        id: extlua
+        with:
+          project_path: .
+          target: websocket
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check
-      - name: Build browser client
+      - name: Package browser client
         working-directory: .
         run: |
           chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
-          ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
+          ./3rd/soluna/bin/luamake-bin/bin/linux/luamake lua clibs/package/package.lua web src/bin dist/web linux
+        env:
+          SOLUNA_JS_PATH: ${{ steps.soluna.outputs.SOLUNA_JS_PATH }}
+          SOLUNA_WASM_PATH: ${{ steps.soluna.outputs.SOLUNA_WASM_PATH }}
+          EXTLUA_BIN_DIR: ${{ steps.extlua.outputs.EXTLUA_BIN_DIR }}
       - name: Test local Worker rooms
         shell: bash
         run: |
