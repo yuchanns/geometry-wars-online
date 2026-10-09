@@ -36,8 +36,15 @@ jobs:
         id: soluna
         with:
           soluna_path: 3rd/soluna
+      - name: Checkout extension build action
+        uses: actions/checkout@v7
+        with:
+          repository: yuchanns/soluna_examples
+          ref: 9eea5b9fd1b77d5b81f04bf50eba36691d2e5ce9
+          path: .build-actions/soluna-examples
+          sparse-checkout: .github/workflows/actions/extlua
       - name: Build WebSocket extension
-        uses: yuchanns/soluna_examples/.github/workflows/actions/extlua@9eea5b9fd1b77d5b81f04bf50eba36691d2e5ce9
+        uses: ./.build-actions/soluna-examples/.github/workflows/actions/extlua
         id: extlua
         with:
           project_path: .
