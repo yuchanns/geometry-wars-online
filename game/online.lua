@@ -5,7 +5,8 @@ function M.new(ctx)
     local network = ltask.uniqueservice "network"
     local inbox
     local pending_send = false
-    local sent, received = 0, 0
+    local sent = 0
+    local snapshot_sequence, last_snapshot = 0, 0
     -- Acknowledge only after the frame consumes this batch, bounding the inbox.
     ltask.dispatch {
         _network_update = function(state, reason, messages)
@@ -45,12 +46,13 @@ function M.new(ctx)
                             net.page=math.min(net.page,math.max(1,math.ceil(#body/7)))
                         elseif kind==33 then
                             if body.count==0 then net.room=nil;net.started=false else net.room=body;net.host=body.host;net.started=body.started end
-                        elseif kind==34 then net.host=body.host;net.started=true;net.error="";ctx.reset_partner();print("Room started / "..(net.host and "host" or "guest"))
+                        elseif kind==34 then net.host=body.host;net.started=true;net.error="";snapshot_sequence=0;last_snapshot=0;ctx.reset_partner();print("Room started / "..(net.host and "host" or "guest"))
                         elseif kind==35 then net.error=body
                         elseif kind==36 then
                             net.room=nil;net.started=false;pending_send=false;net.events={}
-                        elseif kind==2 and net.host then received=time;ctx.remote_input(body)
-                        elseif kind==3 and not net.host then received=time;ctx.apply(body)
+                        elseif kind==2 and net.host then ctx.remote_input(body)
+                        elseif kind==3 and not net.host and body.sequence>last_snapshot then
+                            last_snapshot=body.sequence;ctx.apply(body)
                         end
                     end)
                     if not ok then
@@ -62,12 +64,13 @@ function M.new(ctx)
             end
             ltask.send(network, "received")
         end
-        if net.started and net.host and time-received>.5 then ctx.remote_input({}) end
     end
     function net.publish(time)
-        if not net.started or pending_send or time-sent<1/15 then return end
+        if not net.started or pending_send or time-sent<(net.host and 1/15 or 1/30) then return end
         if net.host then
             local snapshot=ctx.snapshot();snapshot.events=net.events
+            snapshot_sequence=snapshot_sequence+1
+            snapshot.sequence=snapshot_sequence;snapshot.time=time
             if send(3,snapshot,true) then net.events={};pending_send=true;sent=time end
         elseif send(2,ctx.local_input(),true) then pending_send=true;sent=time end
     end

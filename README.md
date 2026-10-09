@@ -8,7 +8,7 @@
 
 Two-player co-op shooter using [Soluna](https://github.com/cloudwu/soluna) and Cloudflare Workers.
 
-Play at <https://geometry-wars.yuchanns.xyz/> with WebGPU. Create a room, join from another client, then click **START GAME**. Move with WASD/arrows; aim and shoot with the mouse.
+Play at <https://geometry-wars.yuchanns.xyz/> with WebGPU. Create a room, join from another client, then click **START GAME**. Move with WASD/arrows; aim and shoot with the mouse. Players share six lives, including their active ships; when no respawn remains, the camera follows the surviving teammate.
 
 Build on Linux (C/C++ compiler and libcurl with WebSocket support):
 
