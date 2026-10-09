@@ -5,19 +5,20 @@ and [Skynet](https://github.com/cloudwu/skynet).
 
 ## Build
 
-Requires luamake 1.11+, a C/C++ compiler, Soluna's platform dependencies, and
-libcurl 8.16+ with WebSocket support. The browser build also requires Emscripten.
+Requires a C/C++ compiler, Soluna's platform dependencies, and libcurl 8.16+
+with WebSocket support. The browser build also requires Emscripten.
 Skynet runs on Linux or macOS.
 
 ```sh
 git clone --recurse-submodules https://github.com/yuchanns/geometry-wars-online.git
 cd geometry-wars-online
-luamake
+./3rd/soluna/bin/luamake-bin/bin/linux/luamake
 # Browser client (activate the Emscripten SDK first):
-luamake -compiler emcc
+./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
 ```
 
-The bundled luamake is in `3rd/soluna/bin/luamake-bin/bin/<platform>/`.
+On macOS replace `linux` with `osx_arm64` or `osx`; on Windows use
+`win32/luamake.exe`.
 Native clients are packaged in `dist/native/`; browser files in `dist/web/`.
 
 ## Run
