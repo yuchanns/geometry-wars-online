@@ -23,7 +23,7 @@ async function peer(port){
 test('Skynet rooms require two players, isolate games, and recover after a player leaves',async t=>{
  const probe=net.createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));
  await mkdir(new URL('build/test/',root),{recursive:true});const config=new URL('build/test/rooms.config',root);await writeFile(config,(await readFile(new URL('server/config',root),'utf8'))+`\nws_port = ${port}\n`);
- const proc=spawn('server/skynet/skynet',[config.pathname],{cwd:root.pathname,stdio:['ignore','pipe','pipe']});t.after(()=>proc.kill('SIGTERM'));
+ const proc=spawn('bin/native/skynet',[config.pathname],{cwd:root.pathname,stdio:['ignore','pipe','pipe']});t.after(()=>proc.kill('SIGTERM'));
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Skynet did not start')),5000);for(const stream of [proc.stdout,proc.stderr])stream.on('data',b=>{if(b.toString().includes('rooms ready')){clearTimeout(timer);resolve();}});proc.once('exit',c=>reject(Error(`Skynet exited: ${c}`)));});
  const host=await peer(port),guest=await peer(port),other=await peer(port);for(const p of [host,guest,other])t.after(()=>p.ws.terminate());
  host.send(17);const room=await host.wait(33,b=>b.count===1);assert.equal(room.host,true);

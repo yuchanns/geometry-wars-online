@@ -1,6 +1,6 @@
 [submodule "server/skynet"]
-	path = server/skynet
+	path = 3rd/skynet
 	url = https://github.com/cloudwu/skynet.git
 [submodule "soluna"]
-	path = soluna
+	path = 3rd/soluna
 	url = https://github.com/cloudwu/soluna.git
