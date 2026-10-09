@@ -1,4 +1,5 @@
 local ltask = require "ltask"
+local protocol = require "net_protocol"
 
 local M = {}
 
@@ -19,6 +20,8 @@ function M.new(ctx)
 	local pending_send = false
 	local sent = 0
 	local snapshot_sequence, last_snapshot = 0, 0
+	local peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
+	local writer, reader = protocol.writer(), protocol.reader()
 
 	-- Acknowledge after the frame consumes this batch, bounding the inbox.
 	ltask.dispatch {
@@ -77,6 +80,8 @@ function M.new(ctx)
 			net.error = ""
 			snapshot_sequence = 0
 			last_snapshot = 0
+			peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
+			writer, reader = protocol.writer(), protocol.reader()
 			ctx.reset_partner()
 			print("Room started / " .. (net.host and "host" or "guest"))
 		elseif kind == 35 then
@@ -87,10 +92,21 @@ function M.new(ctx)
 			pending_send = false
 			net.events = {}
 		elseif kind == 2 and net.host then
-			ctx.remote_input(body)
+			local commands = protocol.commands(body)
+			if body.version == 1 then
+				peer_protocol = 1
+				snapshot_ack = body.snapshot_ack
+			end
+			ctx.remote_input { commands = commands }
 		elseif kind == 3 and not net.host and body.sequence > last_snapshot then
-			last_snapshot = body.sequence
-			ctx.apply(body)
+			local snapshot = reader:decode(body)
+			if snapshot then
+				last_snapshot, snapshot_ack = body.sequence, body.sequence
+				peer_protocol = snapshot.protocol_version or 0
+				ctx.apply(snapshot)
+			else
+				snapshot_ack = 0
+			end
 		end
 	end
 
@@ -131,19 +147,30 @@ function M.new(ctx)
 			return
 		end
 		if net.host then
-			local snapshot = ctx.snapshot()
+			local snapshot = ctx.snapshot(time)
 			snapshot.events = net.events
 			snapshot_sequence = snapshot_sequence + 1
 			snapshot.sequence = snapshot_sequence
 			snapshot.time = time
-			if send(3, snapshot, true) then
+			-- Negotiate in a legacy snapshot so cached older clients still work.
+			snapshot.protocol_version = 1
+			local packet = peer_protocol == 1 and writer:encode(snapshot, snapshot_ack) or snapshot
+			if send(3, packet, true) then
 				net.events = {}
 				pending_send = true
 				sent = time
 			end
-		elseif send(2, ctx.local_input(), true) then
-			pending_send = true
-			sent = time
+		else
+			local input = ctx.local_input(peer_protocol == 1 and last_input_sent or 0)
+			local packet = peer_protocol == 1 and protocol.input(input.commands, snapshot_ack) or input
+			if send(2, packet, true) then
+				-- WebSocket delivers these batches in order; retain inputs locally for
+				-- reconciliation, but do not retransmit the whole pending history.
+				local last = input.commands[#input.commands]
+				last_input_sent = last and last.seq or last_input_sent
+				pending_send = true
+				sent = time
+			end
 		end
 	end
 

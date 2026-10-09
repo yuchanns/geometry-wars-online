@@ -924,6 +924,7 @@ local grid = {}
 ---@type any[]
 local bullets = {}
 local predicted_bullets = {}
+local collision_history = netcode.history(1.25)
 local entity_id = 0
 ---@type any[]
 local enemies = {}
@@ -1396,7 +1397,15 @@ local function spawn_bullet(angle, homing)
 				entity_id = entity_id + 1
 			end
 			bullet.id = entity_id
-			bullet.input_seq = predicted and multiplayer.input_seq or nil
+			local command = multiplayer.remote_command
+			bullet.input_seq = predicted and multiplayer.input_seq or command and command.seq
+			if bullet.input_seq then
+				multiplayer.shot = multiplayer.shot + 1
+			end
+			bullet.shot = bullet.input_seq and multiplayer.shot or nil
+			bullet.view_time = command and collision_history:shot_time(command.view_time, multiplayer.time)
+			bullet.targets, bullet.previous_targets = nil, nil
+			bullet.previous_x, bullet.previous_y = nil, nil
 			bullet.active = true
 			bullet.x = player.x + math.cos(angle) * 15.0
 			bullet.y = player.y + math.sin(angle) * 15.0
@@ -1676,17 +1685,15 @@ local function handle_player_hit(enemy_type)
 	end
 end
 
-local function update_collisions()
-	if not state.player_alive then
-		return
-	end
-
+local function update_projectile_collisions(guest_only)
 	for i = 1, MAX_BULLETS do
 		local bullet = bullets[i]
-		if bullet.active then
+		if bullet.active and (not not bullet.input_seq) == guest_only then
 			for j = 1, MAX_ENEMIES do
 				local enemy = enemies[j]
-				if enemy.active and distance(bullet.x, bullet.y, enemy.x, enemy.y) < enemy.r + 4 then
+				local target = bullet.targets and bullet.targets[j] or not bullet.view_time and enemy
+				local previous = bullet.previous_targets and bullet.previous_targets[j]
+				if netcode.projectile_hit(bullet, enemy, target, previous) then
 					local bullet_angle = math.atan(bullet.vy, bullet.vx)
 					local spark_count = 5 + math.random(0, 3)
 					emit_particles {
@@ -1766,6 +1773,13 @@ local function update_collisions()
 			end
 		end
 	end
+end
+
+local function update_collisions()
+	if not state.player_alive then
+		return
+	end
+	update_projectile_collisions(false)
 
 	if powerup.shield_active and state.player_alive then
 		for i = 1, MAX_ENEMIES do
@@ -2706,18 +2720,28 @@ local function update_shooting(dt)
 	end
 end
 
-local function update_bullets(dt, pool)
+local function update_bullets(dt, pool, guest_only, view_time)
 	pool = pool or bullets
+	local historical = guest_only and view_time and collision_history:sample(view_time)
 	for i = 1, MAX_BULLETS do
 		local bullet = pool[i]
-		if bullet and bullet.active then
+		if bullet and bullet.active and (guest_only == nil or (not not bullet.input_seq) == guest_only) then
+			bullet.previous_x, bullet.previous_y = bullet.x, bullet.y
+			local targets = enemies
+			if pool == predicted_bullets and multiplayer.world_view then
+				targets = multiplayer.world_view.enemies
+			elseif guest_only then
+				bullet.previous_targets, bullet.targets = bullet.targets, historical
+				bullet.view_time = historical and view_time or nil
+				targets = historical or enemies
+			end
 			if bullet.homing then
 				local best_dist = 999999.0
 				local nearest_x = 0.0
 				local nearest_y = 0.0
 				for j = 1, MAX_ENEMIES do
-					local enemy = enemies[j]
-					if enemy.active then
+					local enemy = targets[j]
+					if enemy and enemy.active then
 						local dist = distance(bullet.x, bullet.y, enemy.x, enemy.y)
 						if dist < best_dist then
 							best_dist = dist
@@ -2946,10 +2970,10 @@ local function draw_player_trail()
 	end
 end
 
-local function draw_bullet_pool(pool)
+local function draw_bullet_pool(pool, hide_guest)
 	for i = 1, MAX_BULLETS do
 		local bullet = pool[i]
-		if bullet and bullet.active then
+		if bullet and bullet.active and not (hide_guest and bullet.input_seq) then
 			local core = bullet.homing and BULLET_HOMING_CORE or BULLET_CORE
 			local glow = bullet.homing and BULLET_HOMING_GLOW or BULLET_GLOW
 			draw_masked_circle(core, 3, bullet.x, bullet.y)
@@ -2960,7 +2984,8 @@ local function draw_bullet_pool(pool)
 end
 
 local function draw_bullets()
-	draw_bullet_pool(multiplayer.world_view and multiplayer.world_view.bullets or bullets)
+	draw_bullet_pool(multiplayer.world_view and multiplayer.world_view.bullets or bullets,
+		not multiplayer.host and multiplayer.compensated)
 	if not multiplayer.host then
 		draw_bullet_pool(predicted_bullets)
 	end
@@ -3440,11 +3465,19 @@ do
 			end
 		end
 	end
-	local function active_pool(pool)
+	local function active_pool(pool, fields)
 		local out = {}
 		for i, v in ipairs(pool) do
 			if v.active then
-				out[i] = v
+				if fields then
+					local item = {}
+					for _, key in ipairs(fields) do
+						item[key] = v[key]
+					end
+					out[i] = item
+				else
+					out[i] = v
+				end
 			end
 		end
 		return out
@@ -3454,7 +3487,7 @@ do
 			v.active = false
 		end
 		for i, v in pairs(data) do
-			merge(pool[i], v)
+			pool[i] = v
 		end
 	end
 	local function snapshot_fields(source, keys)
@@ -3492,6 +3525,9 @@ do
 		end,
 		reset_partner = function()
 			prediction, host_inputs, world_buffer = netcode.client(), netcode.host(), netcode.buffer(.1)
+			collision_history = netcode.history(1.25)
+			multiplayer.remote_command, multiplayer.compensated = nil, false
+			multiplayer.shot = 0
 			render_offset_x, render_offset_y, partner_view = 0, 0, nil
 			have_snapshot = false
 			if multiplayer.started then
@@ -3527,10 +3563,18 @@ do
 		remote_input = function(data)
 			host_inputs:receive(data.commands)
 		end,
-		local_input = function()
-			return { commands = prediction.pending }
+		local_input = function(after)
+			local commands = {}
+			for _, command in ipairs(prediction.pending) do
+				if command.seq > after then
+					commands[#commands + 1] = command
+				end
+			end
+			return { commands = commands }
 		end,
-		snapshot = function()
+		snapshot = function(time)
+			-- Keep the same snapshot pairs used by guest interpolation.
+			collision_history:record(time, enemies)
 			local host_health = {}
 			copy_health(host_health)
 			return {
@@ -3543,7 +3587,9 @@ do
 				guest = partner,
 				input_ack = host_inputs.ack,
 				enemies = active_pool(enemies),
-				bullets = active_pool(bullets),
+				bullets = active_pool(bullets, {
+					"id", "active", "x", "y", "vx", "vy", "homing", "input_seq", "shot"
+				}),
 				powerup = snapshot_fields(powerup),
 				feedback = snapshot_fields(feedback)
 			}
@@ -3587,6 +3633,21 @@ do
 			partner.tx, partner.ty, partner.ta = data.host_tx, data.host_ty, data.host_ta
 			apply_pool(enemies, data.enemies)
 			apply_pool(bullets, data.bullets)
+			multiplayer.compensated = data.protocol_version == 1
+			if multiplayer.compensated then
+				local active_shots = {}
+				for _, bullet in pairs(data.bullets) do
+					if bullet.input_seq then
+						active_shots[bullet.input_seq * 8 + bullet.shot] = true
+					end
+				end
+				for _, bullet in ipairs(predicted_bullets) do
+					if bullet.active and bullet.input_seq <= data.input_ack
+						and not active_shots[bullet.input_seq * 8 + bullet.shot] then
+						bullet.active = false
+					end
+				end
+			end
 			world_buffer:push(data.time, data.host_player, data.host_health.life_id, data.enemies, data.bullets,
 				data.input_ack, ltask.counter())
 			have_snapshot = true
@@ -3627,7 +3688,16 @@ do
 				multiplayer.effect_source = "guest-motion"
 				update_player(command.dt)
 				multiplayer.effect_source = "guest-shot"
+				multiplayer.remote_command, multiplayer.shot = command, 0
 				update_shooting(command.dt)
+				multiplayer.remote_command = nil
+			end, function(command)
+				multiplayer.effect_source = nil
+				-- Match the shooter's simulation steps, including bundled commands.
+				-- Rewind each flight step to the displayed world time in that input.
+				local time = collision_history:shot_time(command.view_time, multiplayer.time)
+				update_bullets(command.dt, bullets, true, time)
+				update_projectile_collisions(true)
 			end)
 			multiplayer.effect_source = nil
 			if state.respawn_invincible then
@@ -3652,27 +3722,31 @@ do
 	end
 
 	function multiplayer.predict(dt)
-		if state.player_alive then
+		multiplayer.world_view = world_buffer:advance(dt)
+		do
 			local command = prediction:record(
 				{
 					left = input.left,
 					right = input.right,
 					up = input.up,
 					down = input.down,
-					mouse_left = input.mouse_left,
+					mouse_left = state.player_alive and input.mouse_left,
 					mx = mouse_world_x,
 					my = mouse_world_y
-				}, dt, state.life_id)
+				}, dt, state.life_id, world_buffer.time)
 			if command then
 				multiplayer.input_seq = command.seq
-				update_player(dt)
-				update_shooting(dt)
+				multiplayer.shot = 0
+				mouse_world_x, mouse_world_y = command.mx, command.my
+				if state.player_alive then
+					update_player(dt)
+					update_shooting(dt)
+				end
 			end
 		end
 		local factor = math.exp(-20 * dt)
 		render_offset_x, render_offset_y = render_offset_x * factor, render_offset_y * factor
-		multiplayer.world_view = world_buffer:advance(dt)
-		if multiplayer.world_view then
+		if multiplayer.world_view and not multiplayer.compensated then
 			for _, bullet in ipairs(predicted_bullets) do
 				if bullet.input_seq <= multiplayer.world_view.ack then
 					bullet.active = false
@@ -3743,8 +3817,8 @@ do
 			update_shooting(dt)
 		end
 		multiplayer.update_partner(dt)
-		update_bullets(dt)
 		update_enemies(dt)
+		update_bullets(dt, bullets, false)
 		update_collisions()
 		multiplayer.collide_partner()
 		powerup.update_events(dt)
@@ -4057,6 +4131,7 @@ function callback.frame()
 	end
 
 	local now = ltask.counter()
+	multiplayer.time = now
 	local dt = 1.0 / 60.0
 	if last_tick ~= nil then
 		dt = clamp(now - last_tick, 0, 0.05)

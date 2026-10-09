@@ -44,7 +44,7 @@ end
 
 function M.client()
 	local self = { sequence = 0, pending = {} }
-	function self:record(input, dt, life)
+	function self:record(input, dt, life, view_time)
 		if #self.pending >= MAX_COMMANDS then
 			return nil
 		end
@@ -55,8 +55,9 @@ function M.client()
 			dt = dt,
 			buttons = (input.left and 1 or 0) | (input.right and 2 or 0)
 				| (input.up and 4 or 0) | (input.down and 8 or 0) | (input.mouse_left and 16 or 0),
-			mx = input.mx,
-			my = input.my,
+			mx = math.floor(clamp(input.mx * 4, -32768, 32767) + .5) / 4,
+			my = math.floor(clamp(input.my * 4, -32768, 32767) + .5) / 4,
+			view_time = view_time,
 		}
 		self.pending[#self.pending + 1] = command
 		return command
@@ -85,6 +86,10 @@ local function finite(v)
 	return type(v) == "number" and v == v and math.abs(v) < 1e9
 end
 
+local function timestamp(v)
+	return type(v) == "number" and v == v and math.abs(v) < math.huge
+end
+
 function M.host()
 	local self = {
 		ack = 0,
@@ -103,6 +108,9 @@ function M.host()
 				or not finite(command.mx) or not finite(command.my) then
 				return
 			end
+			if command.view_time ~= nil and not timestamp(command.view_time) then
+				return
+			end
 			if command.seq > self.received then
 				if #self.queue >= MAX_COMMANDS then
 					return
@@ -113,16 +121,21 @@ function M.host()
 		end
 	end
 
-	function self:process(dt, life, alive, step)
+	function self:process(dt, life, alive, step, finish)
 		local budget = math.min(.1, dt * 2)
 		local processed = false
 		while #self.queue > 0 do
 			local command = self.queue[1]
-			if command.life == life and alive then
+			if command.life == life and (alive or finish) then
 				if processed and command.dt > budget then
 					break
 				end
-				step(command)
+				if alive then
+					step(command)
+				end
+				if finish then
+					finish(command)
+				end
 				budget = budget - command.dt
 				processed = true
 			end
@@ -132,6 +145,87 @@ function M.host()
 	end
 
 	return self
+end
+
+-- Guest projectiles advance against the world timeline the shooter saw. The
+-- host keeps collision history; clients never choose damage or an enemy ID.
+function M.history(duration)
+	local self = { frames = {}, duration = duration }
+	function self:record(time, enemies)
+		local frames = self.frames
+		if frames[#frames] and time <= frames[#frames].time then
+			return
+		end
+		local poses = {}
+		for slot, enemy in pairs(enemies) do
+			if enemy.active then
+				poses[slot] = { id = enemy.id, x = enemy.x, y = enemy.y, r = enemy.r, active = true }
+			end
+		end
+		frames[#frames + 1] = { time = time, enemies = poses }
+		while #frames > 2 and (frames[2].time < time - duration or #frames > 256) do
+			table.remove(frames, 1)
+		end
+	end
+
+	function self:shot_time(requested, now)
+		local first = self.frames[1]
+		if timestamp(requested) and first and requested >= math.max(first.time, now - duration)
+			and requested <= now then
+			return requested
+		end
+	end
+
+	function self:sample(time, out)
+		local frames = self.frames
+		if not frames[1] or time < frames[1].time or time > frames[#frames].time then
+			return nil
+		end
+		local a, b = frames[1], frames[1]
+		for i = 2, #frames do
+			b = frames[i]
+			if b.time >= time then
+				break
+			end
+			a = b
+		end
+		local t = b.time > a.time and clamp((time - a.time) / (b.time - a.time), 0, 1) or 1
+		out = out or {}
+		for _, value in pairs(out) do
+			value.active = false
+		end
+		for slot, value in pairs(t < 1 and a.enemies or b.enemies) do
+			local next_value = b.enemies[slot]
+			local target = out[slot] or {}
+			out[slot] = target
+			target.id, target.r, target.active = value.id, value.r, true
+			target.x, target.y = value.x, value.y
+			if next_value and value.id == next_value.id then
+				target.x = value.x + (next_value.x - value.x) * t
+				target.y = value.y + (next_value.y - value.y) * t
+			end
+		end
+		return out
+	end
+
+	return self
+end
+
+-- Sweep the relative motion, rather than testing one endpoint at low FPS.
+function M.projectile_hit(bullet, enemy, target, previous_target)
+	if not enemy.active or not target or not target.active or enemy.id ~= target.id then
+		return false
+	end
+	if not previous_target or not previous_target.active or previous_target.id ~= target.id then
+		previous_target = target
+	end
+	local x = (bullet.previous_x or bullet.x) - previous_target.x
+	local y = (bullet.previous_y or bullet.y) - previous_target.y
+	local dx, dy = bullet.x - target.x - x, bullet.y - target.y - y
+	local length = dx * dx + dy * dy
+	local t = length > 0 and clamp(-(x * dx + y * dy) / length, 0, 1) or 0
+	x, y = x + dx * t, y + dy * t
+	return x * x + y * y < (target.r + 4) ^ 2
 end
 
 local function pose(value)
@@ -145,6 +239,10 @@ local function pose(value)
 end
 
 local function interpolate(a, b, t, out)
+	-- A reused slot must not retain shot ownership from its previous lifetime.
+	for key in pairs(out) do
+		out[key] = nil
+	end
 	for k, v in pairs(b) do
 		out[k] = v
 	end
