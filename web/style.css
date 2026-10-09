@@ -1,8 +1,0 @@
-* { box-sizing: border-box; }
-  body { margin: 0; background: #10141e; color: #a1aebe; font: 13px system-ui, sans-serif; }
-  main { display: grid; place-items: center; min-height: 100dvh; padding: 12px; }
-  canvas { display: block; width: min(calc(100vw - 24px), calc((100dvh - 24px) * 4 / 3), 1080px); height: auto; aspect-ratio: 1080 / 810; outline: none; touch-action: none; }
-  #status { position: fixed; top: 10px; left: 16px; margin: 0; z-index: 1; }
-  #status[hidden] { display: none; }
-.source { position: fixed; top: 14px; right: 16px; color: #a1aebe; padding: 8px; z-index: 2; }
-.source:hover { color: #00ffff; }

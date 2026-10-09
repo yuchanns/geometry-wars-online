@@ -1,11 +1,11 @@
 /build/
 /bin/
 /dist/
-/node_modules/
+node_modules/
 __pycache__/
 *.pyc
 .DS_Store
 
-/.wrangler/
+.wrangler/
 .dev.vars*
 .env*

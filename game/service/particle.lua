@@ -247,7 +247,8 @@ end
 
 local S = {}
 
-local init; do
+local init
+do
 	function init()
 		render = ltask.uniqueservice "render"
 		batch_id = ltask.call(render, "register_batch", ltask.self())

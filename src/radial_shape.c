@@ -12,10 +12,20 @@
 #define RADIAL_LEN12_MASK 0xfffu
 #define RADIAL_LEN_SCALE 8.0f
 #define RADIAL_POWER_SCALE 16.0f
-struct color { unsigned char channel[4]; };
-struct radial_payload { uint32_t color, packed0, packed1; };
-struct radial_inst { float position[3]; struct color color; uint32_t packed0, packed1; };
-struct radial_stream_context { float extent; struct radial_payload payload; };
+struct color {
+	unsigned char channel[4];
+};
+struct radial_payload {
+	uint32_t color;
+	uint32_t packed0;
+	uint32_t packed1;
+};
+struct radial_inst {
+	float position[3];
+	struct color color;
+	uint32_t packed0;
+	uint32_t packed1;
+};
 static int material_id;
 static inline uint32_t
 fixed_len(float value, uint32_t max_value) {
@@ -39,14 +49,6 @@ fixed_power(float value) {
 		fixed = 0xffu;
 	}
 	return fixed;
-}
-
-static inline float
-radial_extent(int kind, float radius, float thickness, float outer_softness) {
-	if (kind == RADIAL_KIND_RING) {
-		return radius + thickness * 0.5f + outer_softness + 1.0f;
-	}
-	return radius + outer_softness + 1.0f;
 }
 
 static struct color
@@ -94,27 +96,36 @@ get_optional_number_field(lua_State *L, int index, const char *field, float defv
 	return value;
 }
 
-
-static material_error radial_submit(const struct material_item *item, void *out) {
- const struct radial_payload *p = (const struct radial_payload *)item->data;
- struct radial_inst *inst = out;
- inst->position[0] = item->x; inst->position[1] = item->y; inst->position[2] = item->transform_index;
- inst->color = argb_color(p->color); inst->packed0 = p->packed0; inst->packed1 = p->packed1;
- return NULL;
+static material_error
+radial_submit(const struct material_item *item, void *out) {
+	const struct radial_payload *payload = (const struct radial_payload *)item->data;
+	struct radial_inst *inst = out;
+	inst->position[0] = item->x;
+	inst->position[1] = item->y;
+	inst->position[2] = item->transform_index;
+	inst->color = argb_color(payload->color);
+	inst->packed0 = payload->packed0;
+	inst->packed1 = payload->packed1;
+	return NULL;
 }
-static void radial_pipeline(sg_pipeline_desc *desc) {
- desc->layout.attrs[ATTR_radial_shape_position].format = SG_VERTEXFORMAT_FLOAT3;
- desc->layout.attrs[ATTR_radial_shape_color].format = SG_VERTEXFORMAT_UBYTE4N;
- desc->layout.attrs[ATTR_radial_shape_packed0].format = SG_VERTEXFORMAT_UINT;
- desc->layout.attrs[ATTR_radial_shape_packed1].format = SG_VERTEXFORMAT_UINT;
+static void
+radial_pipeline(sg_pipeline_desc *desc) {
+	desc->layout.attrs[ATTR_radial_shape_position].format = SG_VERTEXFORMAT_FLOAT3;
+	desc->layout.attrs[ATTR_radial_shape_color].format = SG_VERTEXFORMAT_UBYTE4N;
+	desc->layout.attrs[ATTR_radial_shape_packed0].format = SG_VERTEXFORMAT_UINT;
+	desc->layout.attrs[ATTR_radial_shape_packed1].format = SG_VERTEXFORMAT_UINT;
 }
 static const struct material_hook radial_hooks[] = {
- { "shader", { .shader = radial_shape_shader_desc } },
- { "pipeline", { .pipeline = radial_pipeline } },
- { "submit", { .submit = radial_submit } },
- { NULL, { NULL } },
+	{"shader", {.shader = radial_shape_shader_desc}},
+	{"pipeline", {.pipeline = radial_pipeline}},
+	{"submit", {.submit = radial_submit}},
+	{NULL, {NULL}},
 };
-static int lset_material_id(lua_State *L) { material_id = luaL_checkinteger(L, 1); return 0; }
+static int
+lset_material_id(lua_State *L) {
+	material_id = luaL_checkinteger(L, 1);
+	return 0;
+}
 static int
 lradial_shape(int kind, lua_State *L) {
 	if (material_id <= 0) {
@@ -129,8 +140,8 @@ lradial_shape(int kind, lua_State *L) {
 		return 1;
 	}
 
-	struct radial_stream_context ctx;
-	ctx.payload.color = get_argb_color(L, 1);
+	struct radial_payload payload;
+	payload.color = get_argb_color(L, 1);
 	int has_inner_softness = 0;
 	int has_outer_softness = 0;
 	int has_inner_radius = 0;
@@ -161,10 +172,10 @@ lradial_shape(int kind, lua_State *L) {
 	uint32_t thickness_fixed = fixed_len(thickness, RADIAL_LEN14_MASK);
 	uint32_t inner_softness_fixed = fixed_len(inner_softness, RADIAL_LEN12_MASK);
 	uint32_t outer_softness_fixed = fixed_len(outer_softness, RADIAL_LEN12_MASK);
-	ctx.payload.packed0 = ((uint32_t)kind & RADIAL_KIND_MASK) | (radius_fixed << 4) | (thickness_fixed << 18);
-	ctx.payload.packed1 = inner_softness_fixed | (outer_softness_fixed << 12) | (fixed_power(power) << 24);
+	payload.packed0 = ((uint32_t)kind & RADIAL_KIND_MASK) | (radius_fixed << 4) | (thickness_fixed << 18);
+	payload.packed1 = inner_softness_fixed | (outer_softness_fixed << 12) | (fixed_power(power) << 24);
 
-	struct material_push_item item = { .sprite = -1, .data = &ctx.payload };
+	struct material_push_item item = {.sprite = -1, .data = &payload};
 	return material_push(L, material_id, &item);
 }
 
@@ -187,12 +198,12 @@ int
 luaopen_ext_material_radial_shape(lua_State *L) {
 	luaL_checkversion(L);
 	luaL_Reg l[] = {
-		{ "set_material_id", lset_material_id },
-		{ "circle", lradial_shape_circle },
-		{ "ring", lradial_shape_ring },
-		{ "burst", lradial_shape_burst },
-		{ "instance_size", NULL },
-		{ NULL, NULL },
+		{"set_material_id", lset_material_id},
+		{"circle", lradial_shape_circle},
+		{"ring", lradial_shape_ring},
+		{"burst", lradial_shape_burst},
+		{"instance_size", NULL},
+		{NULL, NULL},
 	};
 	luaL_newlib(L, l);
 	lua_pushinteger(L, sizeof(struct radial_inst));

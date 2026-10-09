@@ -9,7 +9,7 @@ lm.builddir = tostring(lm.outputdir)
 lm.bindir = tostring(project / lm.bindir)
 lm.osbindir = tostring(lm.outputdir / "host")
 lm.platform = lm.web and "emcc" or (lm.os == "windows"
-    and (lm.compiler == "gcc" and "mingw" or lm.cc == "clang-cl" and "clang-cl" or "msvc") or lm.os)
+	and (lm.compiler == "gcc" and "mingw" or lm.cc == "clang-cl" and "clang-cl" or "msvc") or lm.os)
 lm:conf { includes = { lm.outputdir } }
 
 lm:conf {
@@ -93,63 +93,105 @@ lm:conf {
 
 
 if lm.web then
-    -- Shader/Lua headers are generated on the host, even for a WASM build.
-    local lua = lm.basedir / "3rd/lua/onelua.c"
-    local luaexe = lm.outputdir / (lm.os == "windows" and "host/lua.exe" or "host/lua")
-    local command
-    if lm.os == "windows" then
-        command = { "cl", "/nologo", "/O2", "/std:c11", "/DMAKE_LUA",
-            "/D_CRT_SECURE_NO_WARNINGS", lua, "/Fe$out", "/Fo" .. tostring(lm.outputdir / "host/lua.obj") }
-    else
-        command = { os.getenv "HOST_CC" or "cc", "-O2", "-std=c11", "-DMAKE_LUA",
-            "-DLUA_USE_DLOPEN", lua, "-lm", lm.os == "linux" and "-ldl", "-o", "$out" }
-    end
-    lm:rule "host_lua" { args = command, description = "Build host Lua" }
-    lm:build "lua" {
-        rule = "host_lua", inputs = { lua, lm.basedir / "3rd/lua/*.h", lm.basedir / "3rd/lua/*.c" },
-        outputs = { luaexe },
-    }
-    lm:source_set "lua_src" {
-        sources = { "3rd/lua/onelua.c" }, defines = { "MAKE_LIB", "LUA_USE_DLOPEN" },
-    }
+	-- Shader/Lua headers are generated on the host, even for a WASM build.
+	local lua = lm.basedir / "3rd/lua/onelua.c"
+	local luaexe = lm.outputdir / (lm.os == "windows" and "host/lua.exe" or "host/lua")
+	local command
+	if lm.os == "windows" then
+		command = {
+			"cl",
+			"/nologo",
+			"/O2",
+			"/std:c11",
+			"/DMAKE_LUA",
+			"/D_CRT_SECURE_NO_WARNINGS",
+			lua,
+			"/Fe$out",
+			"/Fo" .. tostring(lm.outputdir / "host/lua.obj")
+		}
+	else
+		command = {
+			os.getenv "HOST_CC" or "cc",
+			"-O2",
+			"-std=c11",
+			"-DMAKE_LUA",
+			"-DLUA_USE_DLOPEN",
+			lua,
+			"-lm",
+			lm.os == "linux" and "-ldl",
+			"-o",
+			"$out"
+		}
+	end
+	lm:rule "host_lua" { args = command, description = "Build host Lua" }
+	lm:build "lua" {
+		rule = "host_lua",
+		inputs = { lua, lm.basedir / "3rd/lua/*.h", lm.basedir / "3rd/lua/*.c" },
+		outputs = { luaexe },
+	}
+	lm:source_set "lua_src" {
+		sources = { "3rd/lua/onelua.c" }, defines = { "MAKE_LIB", "LUA_USE_DLOPEN" },
+	}
 else
-    lm:import(lm.basedir / "clibs/lua/make.lua")
+	lm:import(lm.basedir / "clibs/lua/make.lua")
 end
 
 local deps = { "soluna_src", "lua_src" }
 for _, name in ipairs { "ltask", "datalist", "zip", "yoga" } do
-    lm:import(lm.basedir / ("clibs/" .. name .. "/make.lua"))
-    deps[#deps + 1] = name .. "_src"
+	lm:import(lm.basedir / ("clibs/" .. name .. "/make.lua"))
+	deps[#deps + 1] = name .. "_src"
 end
 lm:import(lm.basedir / "clibs/soluna/make.lua")
 
-local functions = { "new", "close", "delete", "send_binary", "get_buffered_amount",
-    "set_onopen_callback_on_thread", "set_onmessage_callback_on_thread",
-    "set_onerror_callback_on_thread", "set_onclose_callback_on_thread" }
+local functions = {
+	"new",
+	"close",
+	"delete",
+	"send_binary",
+	"get_buffered_amount",
+	"set_onopen_callback_on_thread",
+	"set_onmessage_callback_on_thread",
+	"set_onerror_callback_on_thread",
+	"set_onclose_callback_on_thread"
+}
 local imports, exports = {}, { [=[\"_main\"]=] }
 for _, name in ipairs(functions) do
-    imports[#imports + 1] = '"emscripten_websocket_' .. name .. '"'
-    exports[#exports + 1] = [=[\"_emscripten_websocket_]=] .. name .. [=[\"]=]
+	imports[#imports + 1] = '"emscripten_websocket_' .. name .. '"'
+	exports[#exports + 1] = [=[\"_emscripten_websocket_]=] .. name .. [=[\"]=]
 end
-for _, name in ipairs { "strncmp", "snprintf", "calloc", "malloc", "free",
-    "pthread_mutex_lock", "pthread_mutex_unlock", "pthread_mutex_init", "pthread_mutex_destroy",
-    "pthread_self", "emscripten_builtin_memalign" } do
-    exports[#exports + 1] = [=[\"_]=] .. name .. [=[\"]=]
+for _, name in ipairs {
+	"strncmp",
+	"snprintf",
+	"calloc",
+	"malloc",
+	"free",
+	"pthread_mutex_lock",
+	"pthread_mutex_unlock",
+	"pthread_mutex_init",
+	"pthread_mutex_destroy",
+	"pthread_self",
+	"emscripten_builtin_memalign"
+} do
+	exports[#exports + 1] = [=[\"_]=] .. name .. [=[\"]=]
 end
 lm:exe "soluna" {
-    deps = deps,
-    emcc = {
-        ldflags = {
-            "--js-library=3rd/soluna/src/platform/wasm/soluna_ime.js",
-            "--js-library=3rd/soluna/src/platform/wasm/soluna_openurl.js",
-            "-lwebsocket.js",
-            "-s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE='[" .. table.concat(imports, ",") .. "]'",
-            "-s EXPORTED_FUNCTIONS=[" .. table.concat(exports, ",") .. "]",
-            "-s MODULARIZE=1", "-s EXPORT_ES6=1", "-s EXPORT_NAME=createApp",
-            [=[-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"FS_createPath\",\"FS_createDataFile\",\"IDBFS\"]]=],
-            [=[-s "PTHREAD_POOL_SIZE=Math.max(2,navigator.hardwareConcurrency)"]=],
-            "-s PTHREAD_POOL_SIZE_STRICT=2", "-s MAIN_MODULE=2",
-            "-Wl,-u,emscripten_builtin_memalign", "-Wl,--export=emscripten_builtin_memalign",
-        },
-    },
+	deps = deps,
+	emcc = {
+		ldflags = {
+			"--js-library=3rd/soluna/src/platform/wasm/soluna_ime.js",
+			"--js-library=3rd/soluna/src/platform/wasm/soluna_openurl.js",
+			"-lwebsocket.js",
+			"-s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE='[" .. table.concat(imports, ",") .. "]'",
+			"-s EXPORTED_FUNCTIONS=[" .. table.concat(exports, ",") .. "]",
+			"-s MODULARIZE=1",
+			"-s EXPORT_ES6=1",
+			"-s EXPORT_NAME=createApp",
+			[=[-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"FS_createPath\",\"FS_createDataFile\",\"IDBFS\"]]=],
+			[=[-s "PTHREAD_POOL_SIZE=Math.max(2,navigator.hardwareConcurrency)"]=],
+			"-s PTHREAD_POOL_SIZE_STRICT=2",
+			"-s MAIN_MODULE=2",
+			"-Wl,-u,emscripten_builtin_memalign",
+			"-Wl,--export=emscripten_builtin_memalign",
+		},
+	},
 }
