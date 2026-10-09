@@ -7,7 +7,7 @@
   Geometry Wars example credits [skywind3000/GameSample](https://github.com/skywind3000/GameSample)
   as the original implementation. The game source has been modified to add
   networking and a second player; assets have been retained unchanged.
-- `extlua/radial_shape.c`, `extlua/radial_shape.glsl` and the corresponding Lua
+- `src/radial_shape.c`, `src/radial_shape.glsl` and the corresponding Lua
   material registration originate in the same example project. They have been
   adapted for Soluna's current material API, retaining the original fragment
   shader and shape data format.

@@ -10,12 +10,12 @@ local lang = lm.web and "wgsl" or lm.os == "windows" and "hlsl4"
     or lm.os == "macos" and "metal_macos" or "glsl430"
 lm:runlua "radial_shape_shader" {
     script = engine / "clibs/soluna/shader2c.lua",
-    inputs = { "extlua/radial_shape.glsl" }, outputs = { shader },
+    inputs = { "src/radial_shape.glsl" }, outputs = { shader },
     args = { engine / ("bin/sokol-tools-bin/bin/" .. host .. "/sokol-shdc" .. (lm.os == "windows" and ".exe" or "")),
         "$in", "$out", lang },
 }
 lm:dll "websocket" {
-    sources = { "extlua/websocket.c", "extlua/radial_shape.c",
+    sources = { "src/websocket.c", "src/radial_shape.c",
         "3rd/soluna/extlua/extlua.c", "3rd/soluna/extlua/materialapi.c" },
     objdeps = { "radial_shape_shader" },
     includes = { engine / "3rd/lua", engine / "3rd", engine / "extlua", lm.outputdir },
