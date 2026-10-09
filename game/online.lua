@@ -2,7 +2,7 @@ local ltask = require "ltask"
 local M = {}
 function M.new(ctx)
     local net = { host=false, started=false, room=nil, rooms={}, selected=1, page=1, error="", connected=false, events={} }
-    local network = ltask.uniqueservice "geometry_wars/network"
+    local network = ltask.uniqueservice "network"
     local inbox
     local pending_send = false
     local sent, received = 0, 0

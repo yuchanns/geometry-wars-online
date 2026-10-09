@@ -15,7 +15,7 @@ soluna.load_sounds "asset/geometry_wars/sounds.dl"
 
 local args = ...
 local batch = assert(args.batch)
-local particle = ltask.spawn "geometry_wars/particle"
+local particle = ltask.spawn "particle"
 local init
 local multiplayer
 
