@@ -4056,17 +4056,17 @@ function callback.frame()
 		init()
 	end
 
-	local _, now = ltask.now()
+	local now = ltask.counter()
 	local dt = 1.0 / 60.0
 	if last_tick ~= nil then
-		dt = clamp((now - last_tick) / 100.0, 1.0 / 240.0, 0.05)
+		dt = clamp(now - last_tick, 0, 0.05)
 	end
 	last_tick = now
 	if fps_clock == nil then
 		fps_clock = now
 	end
 	fps_frames = fps_frames + 1
-	local fps_elapsed = (now - fps_clock) / 100.0
+	local fps_elapsed = now - fps_clock
 	if fps_elapsed >= 0.25 then
 		fps = fps_frames / fps_elapsed
 		fps_frames = 0
@@ -4080,7 +4080,7 @@ function callback.frame()
 	if current_scene ~= nil then
 		state.sync_scene(current_scene)
 	end
-	multiplayer.publish(now / 100)
+	multiplayer.publish(now)
 	sync_particle_service_frame(dt)
 
 	view.begin(batch)
