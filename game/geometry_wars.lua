@@ -3588,7 +3588,7 @@ do
 			apply_pool(enemies, data.enemies)
 			apply_pool(bullets, data.bullets)
 			world_buffer:push(data.time, data.host_player, data.host_health.life_id, data.enemies, data.bullets,
-				data.input_ack)
+				data.input_ack, ltask.counter())
 			have_snapshot = true
 			for _, e in ipairs(data.events or {}) do
 				if e[3] == "guest-motion" or e[3] == "guest-shot" then

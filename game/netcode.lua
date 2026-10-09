@@ -161,13 +161,30 @@ end
 function M.buffer(delay)
 	local self = {
 		frames = {},
+		clock = 0,
+		delay = delay,
+		interval = delay / 2,
+		jitter = 0,
 		view = {
 			host = {},
 			enemies = {},
 			bullets = {}
 		}
 	}
-	function self:push(time, player, life, enemies, bullets, ack)
+	function self:push(time, player, life, enemies, bullets, ack, received_at)
+		local frames = self.frames
+		local previous = frames[#frames]
+		if previous and time <= previous.time then
+			return
+		end
+		received_at = received_at or self.clock
+		if previous and self.received_at then
+			local interval = time - previous.time
+			self.interval = self.interval + (math.min(interval, .5) - self.interval) * .1
+			self.jitter = clamp(math.max(self.jitter, received_at - self.received_at - interval), 0, .5)
+		end
+		self.received_at = received_at
+		self.delay = clamp(self.interval * 2 + self.jitter, delay, .6)
 		local frame = {
 			time = time,
 			host = pose(player),
@@ -182,20 +199,36 @@ function M.buffer(delay)
 		for i, bullet in pairs(bullets) do
 			frame.bullets[i] = pose(bullet)
 		end
-		local frames = self.frames
 		frames[#frames + 1] = frame
-		if #frames > 8 then
+		if #frames > 32 then
 			table.remove(frames, 1)
 		end
-		self.time = math.max(self.time or time - delay, time - delay)
+		if not self.started then
+			self.time = time - delay
+		end
 	end
 
 	function self:advance(dt)
+		self.clock = self.clock + dt
+		self.jitter = math.max(0, self.jitter - dt * .025)
 		local frames = self.frames
 		if #frames == 0 then
 			return nil
 		end
-		self.time = math.min(self.time + dt, frames[#frames].time)
+		local latest = frames[#frames]
+		self.delay = clamp(self.interval * 2 + self.jitter, delay, .6)
+		-- Resume near the newest state after an outage, rather than replaying seconds of backlog.
+		if latest.time - self.time > 1.2 then
+			self.time = latest.time - self.delay
+		end
+		-- Adjust playback speed instead of jumping the clock when a batch arrives.
+		local error = latest.time - self.delay - self.time
+		local rate = 1
+		if self.started and math.abs(error) > .1 then
+			rate = clamp(1 + error * .5, .9, 1.1)
+		end
+		self.started = true
+		self.time = math.min(math.max(self.time + dt * rate, frames[1].time), latest.time)
 		while #frames > 2 and frames[2].time <= self.time do
 			table.remove(frames, 1)
 		end

@@ -194,6 +194,59 @@ do
 end
 
 do
+	-- Applied snapshot intervals captured from two browser clients on a real CF room.
+	-- Each pair is receipt interval / host simulation interval, in seconds.
+	local arrivals = {
+		{ .154, .162 }, { .140, .071 }, { .040, .081 }, { .133, .081 },
+		{ .030, .081 }, { .599, .467 }, { .530, .701 }, { .143, .081 },
+		{ .029, .071 }, { .153, .162 }, { .142, .071 }, { .041, .081 },
+		{ .111, .081 }, { .020, .071 }, { .153, .163 }, { .143, .152 },
+		{ .132, .081 }, { .040, .071 }, { .235, .244 }
+	}
+	local buffer = netcode.buffer(.1)
+	local receipt, source, index = 0, 0, 1
+	local last_x, holds, measured = nil, 0, 0
+	for frame = 1, 1800 do
+		local now, dt = frame / 60, 1 / 60
+		while receipt <= now do
+			local player = { x = source * 60, y = 100, angle = 0 }
+			local old_time = buffer.time
+			buffer:push(source, player, 1, { { id = 1, x = player.x, y = 100, active = true } }, {}, 1, receipt)
+			if old_time and buffer.started then
+				near(buffer.time, old_time)
+			end
+			local interval = arrivals[index]
+			receipt, source = receipt + interval[1], source + interval[2]
+			index = index % #arrivals + 1
+		end
+		local old_time = buffer.time
+		local view = buffer:advance(dt)
+		if frame > 300 then
+			local dx = view.enemies[1].x - last_x
+			assert(dx >= -1e-7 and dx <= 60 * dt * 1.10001, "A packet batch jumped the playback clock")
+			assert(buffer.time >= old_time, "Playback moved backwards")
+			assert(buffer.delay >= .1 and buffer.delay <= .6, "Jitter buffer exceeded its latency budget")
+			measured = measured + 1
+			if math.abs(dx) < 1e-7 then
+				holds = holds + 1
+			end
+		end
+		last_x = view.enemies[1].x
+	end
+	assert(holds / measured < .03, "Recorded CF jitter repeatedly exhausted the playback buffer")
+	-- A long outage must not leave an unbounded delay estimate or retained history.
+	for i = 1, 100 do
+		local player = { x = source * 60, y = 100, angle = 0 }
+		buffer:push(source, player, 1, {}, {}, 1, receipt + 20)
+		source = source + .08
+	end
+	assert(#buffer.frames <= 32 and buffer.delay <= .6)
+	buffer:advance(1 / 60)
+	assert(buffer.frames[#buffer.frames].time - buffer.time <= .6, "Outage recovery replayed old history")
+	print "PASS: recorded CF burst arrivals, continuous playback and bounded jitter buffer"
+end
+
+do
 	local player = {
 		x = 1990,
 		y = 1990,
