@@ -24,6 +24,4 @@ pnpm start
 
 Open <http://localhost:8789/>. To connect the native client to this local server, append `server=ws://127.0.0.1:8789/ws` to its launch command.
 
-Pushes to `main` build the browser client, test rooms, and deploy through GitHub Actions. Set the repository secret `CLOUDFLARE_API_TOKEN` and your account/domain in `wrangler.jsonc`.
-
 [Source and license credits](THIRD_PARTY.md).
