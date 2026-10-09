@@ -1,0 +1,39 @@
+name: Build Extlua
+description: Build the game's WebSocket and material extension for Soluna WASM
+
+outputs:
+  EXTLUA_BIN_DIR:
+    description: Directory containing the WebAssembly extension
+    value: ${{ steps.output.outputs.EXTLUA_BIN_DIR }}
+
+runs:
+  using: composite
+  steps:
+    - name: Cache extension build
+      uses: actions/cache@v6
+      id: cache
+      with:
+        path: |
+          build/web
+          src/bin/websocket.wasm
+        key: ${{ runner.os }}-extlua-${{ github.sha }}-emsdk-4.0.17
+    - name: Setup Emscripten
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: emscripten-core/setup-emsdk@v16
+      with:
+        version: 4.0.17
+        actions-cache-folder: emsdk-cache
+    - name: Build extension
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
+        ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -mode release -compiler emcc websocket
+    - name: Set output
+      id: output
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        test -f src/bin/websocket.wasm
+        echo "EXTLUA_BIN_DIR=$PWD/src/bin" >> "$GITHUB_OUTPUT"
