@@ -1,5 +1,11 @@
 # Geometry Wars Online
 
+<div align="center">
+
+<strong><a href="https://geometry-wars.yuchanns.xyz">>> Play Online <<</a></strong>
+
+</div>
+
 Two-player co-op shooter using [Soluna](https://github.com/cloudwu/soluna) and Cloudflare Workers.
 
 Play at <https://geometry-wars.yuchanns.xyz/> with WebGPU. Create a room, join from another client, then click **START GAME**. Move with WASD/arrows; aim and shoot with the mouse.
