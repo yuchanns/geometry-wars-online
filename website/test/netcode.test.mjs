@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
 
 test('Lua movement prediction and world interpolation', () => {
-  execFileSync(`${projectRoot}/3rd/soluna/bin/luamake-bin/bin/linux/luamake`, ['lua', 'test/netcode.test.lua'], {
+  execFileSync('luamake', ['lua', 'test/netcode.test.lua'], {
     stdio: 'inherit',
     cwd: projectRoot,
   })

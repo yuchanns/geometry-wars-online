@@ -42,11 +42,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check
-      - name: Package browser client
-        working-directory: .
-        run: |
-          chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
-          ./3rd/soluna/bin/luamake-bin/bin/linux/luamake lua clibs/package/package.lua web src/bin dist/web linux
+      - name: Build website
+        run: pnpm run build
         env:
           SOLUNA_JS_PATH: ${{ steps.soluna.outputs.SOLUNA_JS_PATH }}
           SOLUNA_WASM_PATH: ${{ steps.soluna.outputs.SOLUNA_WASM_PATH }}
@@ -67,7 +64,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: browser-client
-          path: dist/web
+          path: website/dist
           include-hidden-files: true
 
   deploy:
@@ -94,7 +91,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: browser-client
-          path: dist/web
+          path: website/dist
       - name: Deploy Worker and assets
         run: pnpm run deploy
         env:

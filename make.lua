@@ -10,5 +10,9 @@ lm.outputdir = lm.basedir / lm.builddir
 lm:conf { c = "c11", cxx = "c++20", emcc = { c = "gnu11" } }
 
 lm:import "clibs/websocket/make.lua"
-lm:import "clibs/package/make.lua"
-lm:default "client"
+if lm.web then
+	lm:default "websocket"
+else
+	lm:import "clibs/package/make.lua"
+	lm:default "client"
+end

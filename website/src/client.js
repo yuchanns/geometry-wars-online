@@ -17,7 +17,7 @@ async function startGame() {
       throw new Error('This server must send COOP/COEP headers for Soluna WASM threads.')
     if (!navigator.gpu)
       throw new Error('Soluna requires a browser with WebGPU support.')
-    const { default: createApp } = await import('./runtime/soluna.js')
+    const { default: createApp } = await import(/* @vite-ignore */ './runtime/soluna.js')
     const archiveResponse = await fetch('/main.zip')
     if (!archiveResponse.ok)
       throw new Error('Could not load main.zip')

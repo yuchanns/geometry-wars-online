@@ -10,3 +10,7 @@ __pycache__/
 .wrangler/
 .dev.vars*
 .env*
+
+/website/dist/
+/website/public/runtime/
+/website/public/main.zip
