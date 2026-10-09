@@ -1,7 +1,7 @@
 # Third-party sources
 
 - `game/geometry_wars.lua`, `font.lua`, `flow.lua`, `persist.lua`, `utils.lua`,
-  `game/service/particle.lua`, and `game/asset/geometry_wars/` come
+  `game/service/particle.lua`, and `game/asset/` come
   from [yuchanns/soluna_examples](https://github.com/yuchanns/soluna_examples),
   commit `9eea5b9fd1b77d5b81f04bf50eba36691d2e5ce9`, under Apache-2.0. The
   Geometry Wars example credits [skywind3000/GameSample](https://github.com/skywind3000/GameSample)

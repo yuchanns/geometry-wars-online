@@ -1,6 +1,6 @@
 --
 name : music1
-filename : asset/geometry_wars/music/music1.wav
+filename : asset/music/music1.wav
 group : music
 volume : 1.0
 pan : 0.0
@@ -10,7 +10,7 @@ stream : true
 
 --
 name : shoot_01
-filename : asset/geometry_wars/sounds/shoot-01.wav
+filename : asset/sounds/shoot-01.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -19,7 +19,7 @@ loop : false
 
 --
 name : shoot_02
-filename : asset/geometry_wars/sounds/shoot-02.wav
+filename : asset/sounds/shoot-02.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -28,7 +28,7 @@ loop : false
 
 --
 name : shoot_03
-filename : asset/geometry_wars/sounds/shoot-03.wav
+filename : asset/sounds/shoot-03.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -37,7 +37,7 @@ loop : false
 
 --
 name : shoot_04
-filename : asset/geometry_wars/sounds/shoot-04.wav
+filename : asset/sounds/shoot-04.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -46,7 +46,7 @@ loop : false
 
 --
 name : explosion_01
-filename : asset/geometry_wars/sounds/explosion-01.wav
+filename : asset/sounds/explosion-01.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -55,7 +55,7 @@ loop : false
 
 --
 name : explosion_02
-filename : asset/geometry_wars/sounds/explosion-02.wav
+filename : asset/sounds/explosion-02.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -64,7 +64,7 @@ loop : false
 
 --
 name : explosion_03
-filename : asset/geometry_wars/sounds/explosion-03.wav
+filename : asset/sounds/explosion-03.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -73,7 +73,7 @@ loop : false
 
 --
 name : explosion_04
-filename : asset/geometry_wars/sounds/explosion-04.wav
+filename : asset/sounds/explosion-04.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -82,7 +82,7 @@ loop : false
 
 --
 name : explosion_05
-filename : asset/geometry_wars/sounds/explosion-05.wav
+filename : asset/sounds/explosion-05.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -91,7 +91,7 @@ loop : false
 
 --
 name : explosion_06
-filename : asset/geometry_wars/sounds/explosion-06.wav
+filename : asset/sounds/explosion-06.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -100,7 +100,7 @@ loop : false
 
 --
 name : explosion_07
-filename : asset/geometry_wars/sounds/explosion-07.wav
+filename : asset/sounds/explosion-07.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -109,7 +109,7 @@ loop : false
 
 --
 name : explosion_08
-filename : asset/geometry_wars/sounds/explosion-08.wav
+filename : asset/sounds/explosion-08.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -118,7 +118,7 @@ loop : false
 
 --
 name : spawn_01
-filename : asset/geometry_wars/sounds/spawn-01.wav
+filename : asset/sounds/spawn-01.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -127,7 +127,7 @@ loop : false
 
 --
 name : spawn_02
-filename : asset/geometry_wars/sounds/spawn-02.wav
+filename : asset/sounds/spawn-02.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -136,7 +136,7 @@ loop : false
 
 --
 name : spawn_03
-filename : asset/geometry_wars/sounds/spawn-03.wav
+filename : asset/sounds/spawn-03.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -145,7 +145,7 @@ loop : false
 
 --
 name : spawn_04
-filename : asset/geometry_wars/sounds/spawn-04.wav
+filename : asset/sounds/spawn-04.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -154,7 +154,7 @@ loop : false
 
 --
 name : spawn_05
-filename : asset/geometry_wars/sounds/spawn-05.wav
+filename : asset/sounds/spawn-05.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -163,7 +163,7 @@ loop : false
 
 --
 name : spawn_06
-filename : asset/geometry_wars/sounds/spawn-06.wav
+filename : asset/sounds/spawn-06.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -172,7 +172,7 @@ loop : false
 
 --
 name : spawn_07
-filename : asset/geometry_wars/sounds/spawn-07.wav
+filename : asset/sounds/spawn-07.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -181,7 +181,7 @@ loop : false
 
 --
 name : spawn_08
-filename : asset/geometry_wars/sounds/spawn-08.wav
+filename : asset/sounds/spawn-08.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -190,7 +190,7 @@ loop : false
 
 --
 name : rise_01
-filename : asset/geometry_wars/sounds/rise-01.wav
+filename : asset/sounds/rise-01.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -199,7 +199,7 @@ loop : false
 
 --
 name : rise_02
-filename : asset/geometry_wars/sounds/rise-02.wav
+filename : asset/sounds/rise-02.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -208,7 +208,7 @@ loop : false
 
 --
 name : rise_03
-filename : asset/geometry_wars/sounds/rise-03.wav
+filename : asset/sounds/rise-03.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -217,7 +217,7 @@ loop : false
 
 --
 name : rise_04
-filename : asset/geometry_wars/sounds/rise-04.wav
+filename : asset/sounds/rise-04.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -226,7 +226,7 @@ loop : false
 
 --
 name : rise_05
-filename : asset/geometry_wars/sounds/rise-05.wav
+filename : asset/sounds/rise-05.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -235,7 +235,7 @@ loop : false
 
 --
 name : rise_06
-filename : asset/geometry_wars/sounds/rise-06.wav
+filename : asset/sounds/rise-06.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -244,7 +244,7 @@ loop : false
 
 --
 name : rise_07
-filename : asset/geometry_wars/sounds/rise-07.wav
+filename : asset/sounds/rise-07.wav
 group : sound
 volume : 1.0
 pan : 0.0
@@ -253,7 +253,7 @@ loop : false
 
 --
 name : powerup_01
-filename : asset/geometry_wars/sounds/powerup-01.wav
+filename : asset/sounds/powerup-01.wav
 group : sound
 volume : 1.0
 pan : 0.0

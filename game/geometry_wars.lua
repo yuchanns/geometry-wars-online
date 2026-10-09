@@ -11,7 +11,7 @@ local util = require "utils"
 
 math.randomseed(os.time())
 
-soluna.load_sounds "asset/geometry_wars/sounds.dl"
+soluna.load_sounds "asset/sounds.dl"
 
 local args = ...
 local batch = assert(args.batch)
