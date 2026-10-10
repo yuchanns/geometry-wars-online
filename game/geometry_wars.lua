@@ -537,6 +537,11 @@ do
 		register_radius_sprites(add_sprite, "powerup_shape_", build_powerup_shape, 12, 18, 1)
 		register_sprite(add_sprite, "black_hole", build_black_hole_sprite)
 
+		if progress then
+			progress.label = "UPLOADING SPRITES"
+			progress.total = 0
+			flow.sleep(0)
+		end
 		local loaded = soluna.load_sprites(bundle)
 
 		return loaded
@@ -551,14 +556,8 @@ local sprites
 local loading_sprites = {
 	font_glyphs = build_font_assets(),
 }
-local asset_progress = {
-	started = false,
-	ready = false,
-	done = 0,
-	total = 1,
-	current = "",
-	error = nil,
-}
+local asset_progress = require "progress".new()
+asset_progress:update("sprites", { label = "GENERATING SPRITES" })
 local quad = util.quad_cache(matquad)
 local view = util.fixed_view(args, W, H)
 local masked = util.cache(function(sprite)
@@ -577,20 +576,19 @@ local radial_circle = util.cache(function(radius)
 end)
 
 local function start_sprite_loading()
-	if asset_progress.started then
+	local progress = asset_progress[1]
+	if progress.started then
 		return
 	end
-	asset_progress.started = true
+	progress.started = true
 	ltask.fork(function()
-		local ok, loaded = pcall(build_sprite_assets, asset_progress)
+		local ok, loaded = pcall(build_sprite_assets, progress)
 		if ok then
 			sprites = loaded
 			sprites.font_glyphs = loading_sprites.font_glyphs
-			asset_progress.done = asset_progress.total
-			asset_progress.current = "ready"
-			asset_progress.ready = true
+			progress.ready = true
 		else
-			asset_progress.error = tostring(loaded)
+			progress.error = tostring(loaded)
 		end
 	end)
 end
@@ -885,12 +883,16 @@ local audio = {
 	game_over = "explosion_02",
 }
 if audio.pending then
+	asset_progress:update("audio", { label = "DOWNLOADING AUDIO" })
 	ltask.dispatch {
-		_audio_ready = function()
-			audio.pending = false
+		_resource_progress = function(progress)
+			asset_progress:update(progress.id, progress)
+			if progress.id == "audio" and progress.ready then
+				audio.pending = false
+			end
 		end,
 	}
-	ltask.spawn("audio_loader", ltask.self())
+	ltask.spawn("resource_loader", ltask.self())
 end
 local trail_x = {}
 local trail_y = {}
@@ -4040,9 +4042,10 @@ do
 	end
 
 	local function draw_loading_overlay()
+		local progress = asset_progress:current() or { done = 1, total = 1, current = "", label = "READY" }
 		local ratio = 0.0
-		if asset_progress.total > 0 then
-			ratio = clamp(asset_progress.done / asset_progress.total, 0.0, 1.0)
+		if progress.total > 0 then
+			ratio = clamp(progress.done / progress.total, 0.0, 1.0)
 		end
 
 		local bar_w = 360
@@ -4052,7 +4055,7 @@ do
 		local fill_w = math.floor((bar_w - 4) * ratio + 0.5)
 		local pulse = math.floor((math.sin(state.total_time * 4.0) * 0.5 + 0.5) * 80 + 80)
 		local percent = math.floor(ratio * 100.0 + 0.5)
-		local current = asset_progress.current
+		local current = progress.current
 		if current == "" then
 			current = "initializing"
 		end
@@ -4074,10 +4077,13 @@ do
 		}, W // 2 - 80, H // 2 - 8)
 		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 - 82, "GEOMETRY WARS", 16, COLOR_CYAN,
 			"CV", W, 20)
-		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 + 12, "LOADING SPRITES", 8,
+		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 + 12,
+			progress.error and "LOADING FAILED" or progress.label, 8,
 			COLOR_WHITE, "CV", W, 10)
 		bitmapfont.draw_text(batch, masked, loading_sprites.font_glyphs, 0, H // 2 + 26,
-			string.format("%3d%%  %s", percent, current), 8, argb(180, 180, 220, 255), "CV", W, 10)
+			progress.error and "RELOAD TO RETRY" or
+				string.format("%s  %s", progress.total > 0 and string.format("%3d%%", percent) or "...", current:sub(1, 54)),
+			8, argb(180, 180, 220, 255), "CV", W, 10)
 
 		batch:add(quad {
 			width = bar_w,
@@ -4191,10 +4197,7 @@ do
 		state.set_scene_hooks(nil, draw_loading_overlay)
 		start_sprite_loading()
 		while true do
-			if asset_progress.error then
-				error(asset_progress.error)
-			end
-			if asset_progress.ready then
+			if asset_progress:complete() then
 				state.load_records()
 				reset()
 				return "online"
