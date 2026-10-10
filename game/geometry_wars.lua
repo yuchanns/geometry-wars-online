@@ -2255,14 +2255,15 @@ function powerup.draw_black_holes()
 end
 
 function powerup.draw_world_fx()
+	local x, y = powerup.nuke_x or player.x, powerup.nuke_y or player.y
 	if powerup.nuke_fx_active and powerup.nuke_wave_alpha > 0 then
 		local outer = particle_alpha(COLOR_CYAN, powerup.nuke_wave_alpha * 200.0)
 		local inner = argb(quantize_byte(powerup.nuke_wave_alpha * 100.0, 16), 200, 255, 255)
 		if powerup.nuke_wave_radius > 0.01 then
-			draw_masked_ring(outer, powerup.nuke_wave_radius, powerup.nuke_x, powerup.nuke_y, 3.0, 1.0, 2.0)
+			draw_masked_ring(outer, powerup.nuke_wave_radius, x, y, 3.0, 1.0, 2.0)
 		end
 		if powerup.nuke_wave_radius > 0.02 then
-			draw_masked_ring(inner, powerup.nuke_wave_radius * 0.85, powerup.nuke_x, powerup.nuke_y, 2.0, 0.75, 1.5)
+			draw_masked_ring(inner, powerup.nuke_wave_radius * 0.85, x, y, 2.0, 0.75, 1.5)
 		end
 	end
 end
@@ -2642,6 +2643,7 @@ local function clear_runtime_state()
 	powerup.nuke_wave_radius = 0.0
 	powerup.nuke_wave_alpha = 0.0
 	powerup.nuke_fx_active = false
+	powerup.nuke_x, powerup.nuke_y = nil, nil
 	powerup.clear_ability()
 
 	for i = 1, 2 do
