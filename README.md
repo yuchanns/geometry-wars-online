@@ -1,35 +1,33 @@
 # Geometry Wars Online
 
+A two-player co-op arena shooter. Dodge the swarm, keep your combo going, and see how long you can survive together.
+
 <div align="center">
 
-<strong><a href="https://geometry-wars.yuchanns.xyz">>> Play Online <<</a></strong>
+<strong><a href="https://geometry-wars.yuchanns.xyz/">Play Online</a></strong>
 
 </div>
 
-Two-player co-op shooter using [Soluna](https://github.com/cloudwu/soluna) and Cloudflare Workers.
+## Gameplay Demo
 
-Play at <https://geometry-wars.yuchanns.xyz/> with WebGPU. Create a room, join from another client, then click **START GAME**. Move with WASD/arrows; aim and shoot with the mouse.
+https://github.com/user-attachments/assets/744e8f62-8b05-4ebf-8622-4a40b58ccc00
 
-Build on Linux (C/C++ compiler and libcurl with WebSocket support):
+## Play Together
 
-```sh
-git clone --recurse-submodules https://github.com/yuchanns/geometry-wars-online.git
-cd geometry-wars-online
-./3rd/soluna/bin/luamake-bin/bin/linux/luamake
-cd dist/native
-./soluna game/main.game 'cpath=./?.so'
-```
+Open the game on a desktop with a keyboard and mouse. Your browser needs WebGPU support.
 
-For the browser client and local Worker, activate Emscripten and run from the repository root:
+1. **Create a room.** [Open the game](https://geometry-wars.yuchanns.xyz/) and click **CREATE ROOM**.
+2. **Bring a friend.** Share your room number. Your friend opens the game, finds that room in the list, and clicks **JOIN**.
+3. **Start together.** Once both players are ready, the room creator clicks **START GAME**.
 
-```sh
-./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
-cd website
-pnpm install
-pnpm run build
-pnpm start
-```
+## Controls
 
-Open <http://localhost:8789/>. To connect the native client to this local server, append `server=ws://127.0.0.1:8789/ws` to its launch command.
+| Action | Control |
+| --- | --- |
+| Move | WASD or arrow keys |
+| Aim | Mouse |
+| Shoot | Hold the left mouse button |
 
-[Source and license credits](THIRD_PARTY.md).
+Want to run or build it locally? See the [development guide](docs/DEVELOPMENT.md).
+
+Built with [Soluna](https://github.com/cloudwu/soluna). [Source and license credits](docs/THIRD_PARTY.md).
