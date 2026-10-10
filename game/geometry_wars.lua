@@ -2347,7 +2347,8 @@ function powerup.draw_screen_fx()
 end
 
 local function update_spawner(dt)
-	if state.scene ~= "combat" or not state.player_alive then
+	-- The host simulates the world even after its own player dies.
+	if state.scene ~= "combat" or not (state.player_alive or multiplayer.other_alive()) then
 		return
 	end
 	state.game_time = state.game_time + dt

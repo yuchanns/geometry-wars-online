@@ -11,3 +11,10 @@ test('Lua prediction, projectile compensation and snapshot protocol', () => {
     cwd: projectRoot,
   })
 })
+
+test('World spawning continues after host death while the guest is alive', () => {
+  execFileSync(`${projectRoot}/3rd/soluna/bin/luamake-bin/bin/linux/luamake`, ['lua', 'test/spawner.test.lua'], {
+    stdio: 'inherit',
+    cwd: projectRoot,
+  })
+})
