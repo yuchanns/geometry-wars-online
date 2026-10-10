@@ -13,3 +13,5 @@ __pycache__/
 /website/dist/
 /website/public/runtime/
 /website/public/main.zip
+/website/public/audio/
+/website/src/audio-manifest.json

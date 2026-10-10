@@ -847,6 +847,7 @@ local state = {
 	leaderboard = {},
 }
 local audio = {
+	pending = soluna.platform == "wasm" and soluna.settings().deferred_audio,
 	music_voice = nil,
 	death_sound_played = false,
 	shoot = { "shoot_01", "shoot_02", "shoot_03", "shoot_04" },
@@ -883,6 +884,14 @@ local audio = {
 	death = "explosion_01",
 	game_over = "explosion_02",
 }
+if audio.pending then
+	ltask.dispatch {
+		_audio_ready = function()
+			audio.pending = false
+		end,
+	}
+	ltask.spawn("audio_loader", ltask.self())
+end
 local trail_x = {}
 local trail_y = {}
 local trail_a = {}
@@ -1143,6 +1152,9 @@ local function stop_music(fade_seconds)
 end
 
 local function ensure_music_playing()
+	if audio.pending then
+		return
+	end
 	local voice = audio.music_voice
 	if voice ~= nil and voice:playing() then
 		return
@@ -1157,6 +1169,9 @@ end
 local function play_effect(name, opts)
 	if multiplayer and not multiplayer.local_effects then
 		multiplayer.record("sound", { name, opts or {} })
+	end
+	if audio.pending then
+		return
 	end
 	local voice, err = soluna.play_sound(name, opts)
 	if voice == nil then
@@ -3959,6 +3974,9 @@ end
 
 do
 	local function update_combat_scene(dt)
+		if audio.music_voice == nil then
+			ensure_music_playing()
+		end
 		update_star_layer(stars_far, dt)
 		update_star_layer(stars_near, dt)
 		update_mouse_world()
