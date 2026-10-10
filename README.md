@@ -32,6 +32,4 @@ pnpm start
 
 Open <http://localhost:8789/>. To connect the native client to this local server, append `server=ws://127.0.0.1:8789/ws` to its launch command.
 
-The browser build keeps audio out of `main.zip`. Each WAV downloads separately from `/audio/` with a content hash in its filename. The game starts while these files download, then assembles `sound.zip` in memory and enables music and effects. Native builds use the original audio files.
-
 [Source and license credits](THIRD_PARTY.md).
