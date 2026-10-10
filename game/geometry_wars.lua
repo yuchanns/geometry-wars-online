@@ -1153,7 +1153,7 @@ local function ensure_music_playing()
 end
 
 local function play_effect(name, opts)
-	if multiplayer then
+	if multiplayer and not multiplayer.local_effects then
 		multiplayer.record("sound", { name, opts or {} })
 	end
 	local voice, err = soluna.play_sound(name, opts)
@@ -1291,7 +1291,7 @@ function state.insert_leaderboard(score, survival_time, kills, combo)
 end
 
 local function shake(amount, frames)
-	if multiplayer then multiplayer.record("shake", { amount, frames }) end
+	if multiplayer and not multiplayer.local_effects then multiplayer.record("shake", { amount, frames }) end
 	if amount > state.shake_amt then
 		state.shake_amt = amount
 		state.shake_frames = frames
@@ -1319,7 +1319,7 @@ local function draw_masked_ring(color, radius, x, y, thickness, inner_softness, 
 end
 
 function feedback.spawn_float_text(x, y, text, color)
-	if multiplayer then multiplayer.record("float", { x, y, text, color }) end
+	if multiplayer and not multiplayer.local_effects then multiplayer.record("float", { x, y, text, color }) end
 	for i = 1, MAX_FLOAT_TEXTS do
 		local float_text = feedback.float_texts[i]
 		if float_text.life <= 0 then
@@ -1336,7 +1336,7 @@ function feedback.spawn_float_text(x, y, text, color)
 end
 
 function feedback.show_popup(text, color, scale)
-	if multiplayer then multiplayer.record("popup", { text, color, scale }) end
+	if multiplayer and not multiplayer.local_effects then multiplayer.record("popup", { text, color, scale }) end
 	feedback.popup.text = text
 	feedback.popup.color = color
 	feedback.popup.life = POPUP_LIFE
@@ -1345,7 +1345,7 @@ function feedback.show_popup(text, color, scale)
 end
 
 function feedback.ticker_add(text, color)
-	if multiplayer then multiplayer.record("ticker", { text, color }) end
+	if multiplayer and not multiplayer.local_effects then multiplayer.record("ticker", { text, color }) end
 	local slot = -1
 	for i = 1, MAX_TICKER do
 		if not feedback.ticker_msgs[i].active then
@@ -1406,7 +1406,8 @@ local function spawn_bullet(angle, homing)
 end
 
 local function emit_particles(event)
-	if multiplayer then
+	if multiplayer and not multiplayer.local_effects
+		and event.kind ~= "thrust" then
 		multiplayer.record("fx", event)
 	end
 	ltask.send(particle, "effect", event)
@@ -1414,6 +1415,44 @@ end
 
 local function spawn_explosion(x, y, style, count)
 	emit_particles { kind = "explosion", x = x, y = y, style = style, count = count }
+end
+
+-- One collision result drives its local presentation on both players.
+function feedback.enemy_hit(event, presented)
+	multiplayer.record("hit", event)
+	local previous = multiplayer.local_effects
+	multiplayer.local_effects = true
+	local kind, x, y = event.type, event.x, event.y
+	if not presented then
+		if event.cause == "bullet" then
+			emit_particles { kind = "hit", x = event.hit_x, y = event.hit_y, angle = event.angle }
+			if event.dead then
+				spawn_explosion(x, y, kind, 25 + kind * 10)
+				grid_impulse(x, y, 120, 50 + kind * 20)
+				shake(1 + kind // 2, 3 + kind)
+				play_random_effect(audio.explosion, { volume = .25 })
+				if kind == 3 then
+					shake(7, 30)
+					state.screen_shake_frames = 30
+				end
+			else
+				shake(1, 2)
+			end
+		elseif event.cause == "shield" then
+			spawn_explosion(x, y, kind, 12)
+			grid_impulse(x, y, 60, 40)
+			play_random_effect(audio.explosion, { volume = .25 })
+		else
+			local count = event.cause == "nuke" and 20 + kind * 8 or 8
+			spawn_explosion(x, y, kind, count)
+		end
+	end
+	if event.points then
+		local color = event.cause == "bullet" and COLOR_YELLOW
+			or event.cause == "shield" and argb(255, 255, 215, 0) or COLOR_WHITE
+		feedback.spawn_float_text(x, y - 10, string.format("+%d", event.points), color)
+	end
+	multiplayer.local_effects = previous
 end
 
 local function spawn_enemy(enemy_type, x, y)
@@ -1649,7 +1688,7 @@ local function handle_player_hit(enemy_type)
 		for i = 1, MAX_ENEMIES do
 			local enemy = enemies[i]
 			if enemy.active and distance(player.x, player.y, enemy.x, enemy.y) < SPAWN_CLEAR_RADIUS then
-				spawn_explosion(enemy.x, enemy.y, enemy.type, 8)
+				feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y, cause = "clear", dead = true }
 				enemy.active = false
 			end
 		end
@@ -1658,6 +1697,7 @@ local function handle_player_hit(enemy_type)
 		end
 		state.respawn_invincible = true
 		state.respawn_timer = RESPAWN_INVINCIBLE
+		state.respawn_started = state.total_time
 	end
 end
 
@@ -1670,13 +1710,17 @@ local function update_projectile_collisions(guest_only)
 				local target = bullet.targets and bullet.targets[j] or not bullet.view_time and enemy
 				local previous = bullet.previous_targets and bullet.previous_targets[j]
 				if netcode.projectile_hit(bullet, enemy, target, previous) then
-					local source = multiplayer.effect_source
-					if guest_only then
-						multiplayer.effect_source = "guest-hit:" .. enemy.id
-					end
-					emit_particles {
-						kind = "hit", x = bullet.x, y = bullet.y,
-						angle = math.atan(bullet.vy, bullet.vx) + math.pi
+					local source, source_id = multiplayer.effect_source, multiplayer.effect_id
+					multiplayer.effect_source, multiplayer.effect_id = "hit", enemy.id
+					local event = {
+						type = enemy.type,
+						x = enemy.x,
+						y = enemy.y,
+						cause = "bullet",
+						hit_x = bullet.x,
+						hit_y = bullet.y,
+						angle = math.atan(bullet.vy, bullet.vx) + math.pi,
+						dead = enemy.hp <= 1
 					}
 
 					bullet.active = false
@@ -1692,11 +1736,8 @@ local function update_projectile_collisions(guest_only)
 						local earned = points * state.combo
 						state.score = state.score + earned
 						state.total_kills = state.total_kills + 1
-						spawn_explosion(enemy.x, enemy.y, enemy.type, 25 + enemy.type * 10)
-						grid_impulse(enemy.x, enemy.y, 120, 50 + enemy.type * 20)
-						shake(1 + enemy.type // 2, 3 + enemy.type)
-						play_random_effect(audio.explosion, { volume = 0.25 })
-						feedback.spawn_float_text(enemy.x, enemy.y - 10.0, string.format("+%d", earned), COLOR_YELLOW)
+						event.points = earned
+						feedback.enemy_hit(event)
 						powerup.try_enemy_drop(enemy.type, enemy.x, enemy.y)
 						if state.combo >= 5 and not state.combo5_shown then
 							state.combo5_shown = true
@@ -1724,9 +1765,6 @@ local function update_projectile_collisions(guest_only)
 							shake(7, 15)
 						end
 						if enemy.type == 3 then
-							shake(7, 30)
-							state.screen_shake_frames = 30
-							multiplayer.record("screen-shake", 30)
 							for k = 0, 2 do
 								local split_angle = (k * 120.0) * math.pi / 180.0
 								spawn_enemy(0, enemy.x + math.cos(split_angle) * 20.0,
@@ -1735,9 +1773,9 @@ local function update_projectile_collisions(guest_only)
 						end
 						enemy.active = false
 					else
-						shake(1, 2)
+						feedback.enemy_hit(event)
 					end
-					multiplayer.effect_source = source
+					multiplayer.effect_source, multiplayer.effect_id = source, source_id
 					break
 				end
 			end
@@ -1770,11 +1808,8 @@ local function update_collisions()
 						local earned = points * state.combo
 						state.score = state.score + earned
 						state.total_kills = state.total_kills + 1
-						spawn_explosion(enemy.x, enemy.y, enemy.type, 12)
-						grid_impulse(enemy.x, enemy.y, 60, 40)
-						play_random_effect(audio.explosion, { volume = 0.25 })
-						feedback.spawn_float_text(enemy.x, enemy.y - 10.0, string.format("+%d", earned),
-							argb(255, 255, 215, 0))
+						feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y,
+							cause = "shield", dead = true, points = earned }
 						enemy.active = false
 						if enemy.type == 3 then
 							for k = 0, 2 do
@@ -1837,7 +1872,7 @@ local function update_collisions()
 end
 
 local function update_timers(dt)
-	if state.combo > 1 then
+	if state.combo > 1 and (not multiplayer.started or multiplayer.host) then
 		state.combo_timer = state.combo_timer - dt
 		if state.combo_timer <= 0 then
 			state.combo = 1
@@ -1914,6 +1949,7 @@ function powerup.spawn(x, y, powerup_type, ability_type)
 			entry.y = y
 			entry.r = 15.0
 			entry.life = 8.0
+			entry.born = state.total_time
 			entry.pulse = 0.0
 			entry.active = true
 			entry.type = powerup_type or 0
@@ -1934,6 +1970,7 @@ end
 function powerup.clear_ability()
 	powerup.energy_active = false
 	powerup.energy_timer = 0.0
+	powerup.energy_started = 0
 	powerup.ability_type = 0
 	powerup.homing_active = false
 	powerup.shield_active = false
@@ -1951,10 +1988,12 @@ function powerup.spawn_black_hole(x, y)
 			bh.radius = 100.0
 			bh.pull_strength = 120.0
 			bh.life = 8.0
+			bh.born = state.total_time
 			bh.absorbed = 0
 			bh.pulse = 0.0
 			bh.exploding = false
 			bh.explode_timer = 0.0
+			bh.exploded = 0
 			return true
 		end
 	end
@@ -1970,17 +2009,15 @@ function powerup.trigger_jack(total)
 end
 
 function powerup.activate_ability(ability_type)
-	local def = ABILITY_DEFS[ability_type] or ABILITY_DEFS[0]
 	powerup.ability_type = ability_type
 	powerup.energy_active = true
 	powerup.energy_timer = powerup.energy_duration
+	powerup.energy_started = state.total_time
 	powerup.homing_active = ability_type == 1
 	powerup.shield_active = ability_type == 2
 	powerup.slow_active = ability_type == 3
 	powerup.shield_angle = 0.0
-	play_effect(audio.rise[ability_type + 1])
-	feedback.show_popup(def.popup, def.color, 3)
-	shake(3, 8)
+	powerup.pickup_feedback { type = 1, ability = ability_type, x = player.x, y = player.y }
 end
 
 function powerup.try_enemy_drop(enemy_type, x, y)
@@ -2006,29 +2043,43 @@ end
 
 function powerup.nuke_feedback(x, y)
 	powerup.nuke_x, powerup.nuke_y = x or player.x, y or player.y
-	if multiplayer then multiplayer.record("nuke", { powerup.nuke_x, powerup.nuke_y }) end
 	powerup.nuke_flash_alpha, powerup.nuke_wave_radius = 1, 0
 	powerup.nuke_wave_alpha, powerup.nuke_fx_active = 1, true
 end
 
-function powerup.trigger_nuke()
-	powerup.nuke_feedback()
-	feedback.show_popup("NUKE ACTIVATED!", COLOR_CYAN, 3)
-	shake(8, 20)
-	grid_impulse(player.x, player.y, 600, 400)
+function powerup.pickup_feedback(event)
+	multiplayer.record("pickup", event)
+	local previous = multiplayer.local_effects
+	multiplayer.local_effects = true
+	if event.type == 1 then
+		local def = ABILITY_DEFS[event.ability] or ABILITY_DEFS[0]
+		play_effect(audio.rise[event.ability + 1])
+		feedback.show_popup(def.popup, def.color, 3)
+		shake(3, 8)
+	else
+		powerup.nuke_feedback(event.x, event.y)
+		feedback.show_popup("NUKE ACTIVATED!", COLOR_CYAN, 3)
+		shake(8, 20)
+		grid_impulse(event.x, event.y, 600, 400)
+		spawn_explosion(event.x, event.y, "nuke", 50)
+		play_effect(audio.powerup)
+	end
+	multiplayer.local_effects = previous
+end
 
+function powerup.trigger_nuke()
+	powerup.pickup_feedback { type = 0, x = player.x, y = player.y }
 	for i = 1, MAX_ENEMIES do
 		local enemy = enemies[i]
 		if enemy.active then
 			local earned = ENEMY_DEFS[enemy.type].score
 			state.score = state.score + earned
 			state.total_kills = state.total_kills + 1
-			spawn_explosion(enemy.x, enemy.y, enemy.type, 20 + enemy.type * 8)
-			feedback.spawn_float_text(enemy.x, enemy.y - 10.0, string.format("+%d", earned), COLOR_WHITE)
+			feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y,
+				cause = "nuke", dead = true, points = earned }
 			enemy.active = false
 		end
 	end
-	spawn_explosion(player.x, player.y, "nuke", 50)
 end
 
 function powerup.update(dt)
@@ -2105,14 +2156,15 @@ function powerup.update_events(dt)
 							if state.combo > state.highest_combo then
 								state.highest_combo = state.combo
 							end
-							spawn_explosion(enemy.x, enemy.y, enemy.type, 8)
-							feedback.spawn_float_text(enemy.x, enemy.y - 10.0, string.format("+%d", earned), COLOR_WHITE)
+							feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y,
+								cause = "void", dead = true, points = earned }
 							enemy.active = false
 						end
 					end
 				end
 				if bh.absorbed >= 10 then
 					bh.exploding = true
+					bh.exploded = state.total_time
 					bh.explode_timer = 0.0
 					shake(5, 12)
 					spawn_explosion(bh.x, bh.y, 3, 30)
@@ -2138,18 +2190,15 @@ function powerup.try_collect()
 	for i = 1, MAX_POWERUPS do
 		local entry = powerup.entries[i]
 		if entry.active and distance(player.x, player.y, entry.x, entry.y) < entry.r + 12.0 then
-			local source = multiplayer.effect_source
-			if multiplayer.remote_command then
-				multiplayer.effect_source = "guest-pickup:" .. entry.id
-			end
+			local source, source_id = multiplayer.effect_source, multiplayer.effect_id
+			multiplayer.effect_source, multiplayer.effect_id = "pickup", entry.id
 			if entry.type == 0 then
 				powerup.trigger_nuke()
-				play_effect(audio.powerup)
 			elseif entry.type == 1 then
 				powerup.activate_ability(entry.ability)
 			end
 			entry.active = false
-			multiplayer.effect_source = source
+			multiplayer.effect_source, multiplayer.effect_id = source, source_id
 		end
 	end
 end
@@ -2454,7 +2503,7 @@ local function init_grid()
 end
 
 grid_impulse = function(cx, cy, radius, strength)
-	if multiplayer then
+	if multiplayer and not multiplayer.local_effects then
 		multiplayer.record("grid", { cx, cy, radius, strength })
 	end
 	for row = 1, GRID_ROWS do
@@ -2571,6 +2620,7 @@ local function clear_runtime_state()
 	state.player_alive = true
 	state.respawn_invincible = false
 	state.respawn_timer = 0.0
+	state.respawn_started = 0
 	state.killed_by_type = -1
 	state.shake_amt = 0.0
 	state.shake_frames = 0
@@ -2794,7 +2844,7 @@ local function update_mouse_world()
 	mouse_world_y = vy + camera.y
 end
 
-local function record_trail()
+local function record_trail(position)
 	if state.trail_count < TRAIL_LEN then
 		state.trail_count = state.trail_count + 1
 	end
@@ -2803,9 +2853,28 @@ local function record_trail()
 		trail_y[i] = trail_y[i - 1]
 		trail_a[i] = trail_a[i - 1]
 	end
-	trail_x[1] = player.x
-	trail_y[1] = player.y
-	trail_a[1] = player.angle
+	trail_x[1] = position.x
+	trail_y[1] = position.y
+	trail_a[1] = position.angle
+end
+
+local function update_player_feedback(dt, position, is_moving)
+	state.trail_timer = state.trail_timer + dt
+	while state.trail_timer >= TRAIL_INTERVAL do
+		state.trail_timer = state.trail_timer - TRAIL_INTERVAL
+		record_trail(position)
+	end
+
+	state.thrust_particle_timer = state.thrust_particle_timer + dt
+	if is_moving and not state.respawn_invincible and state.thrust_particle_timer >= 0.06 then
+		state.thrust_particle_timer = 0
+		local rear_x = position.x - math.cos(position.angle) * 14.0
+		local rear_y = position.y - math.sin(position.angle) * 14.0
+		emit_particles {
+			kind = "thrust", x = rear_x, y = rear_y, angle = position.angle + math.pi,
+			style = powerup.energy_active and "energy" or "normal"
+		}
+	end
 end
 
 local function update_player(dt)
@@ -2823,22 +2892,7 @@ local function update_player(dt)
 		black_holes = powerup.black_holes
 	})
 
-	state.trail_timer = state.trail_timer + dt
-	while state.trail_timer >= TRAIL_INTERVAL do
-		state.trail_timer = state.trail_timer - TRAIL_INTERVAL
-		record_trail()
-	end
-
-	state.thrust_particle_timer = state.thrust_particle_timer + dt
-	if is_moving and not state.respawn_invincible and state.thrust_particle_timer >= 0.06 then
-		state.thrust_particle_timer = 0
-		local rear_x = player.x - math.cos(player.angle) * 14.0
-		local rear_y = player.y - math.sin(player.angle) * 14.0
-		emit_particles {
-			kind = "thrust", x = rear_x, y = rear_y, angle = player.angle + math.pi,
-			style = powerup.energy_active and "energy" or "normal"
-		}
-	end
+	update_player_feedback(dt, player, is_moving)
 end
 
 local function update_camera(dt)
@@ -2950,7 +3004,7 @@ end
 
 local function draw_bullets()
 	draw_bullet_pool(multiplayer.world_view and multiplayer.world_view.bullets or bullets,
-		not multiplayer.host and multiplayer.compensated)
+		not multiplayer.host)
 	if not multiplayer.host then
 		draw_bullet_pool(predicted_bullets)
 	end
@@ -2960,7 +3014,8 @@ local function draw_enemies()
 	local pool = multiplayer.world_view and multiplayer.world_view.enemies or enemies
 	for i = 1, MAX_ENEMIES do
 		local enemy = pool[i]
-		if enemy and enemy.active and not (multiplayer.local_feedback and multiplayer.local_feedback.hits[enemy.id]) then
+		local hit = multiplayer.local_feedback and enemy and multiplayer.local_feedback.hits[enemy.id]
+		if enemy and enemy.active and not (hit and hit.dead) then
 			local def = ENEMY_DEFS[enemy.type]
 			local color = def.color
 			local glow = particle_alpha(color, 60)
@@ -3364,35 +3419,17 @@ do
 		"killed_by_type",
 		"respawn_invincible",
 		"respawn_timer",
+		"respawn_started",
 		"shoot_timer",
 		"trail_timer",
 		"trail_count",
 		"thrust_particle_timer"
 	}
-	local world_keys = {
-		"scene",
-		"scene_time",
-		"game_time",
-		"lives",
-		"score",
-		"combo",
-		"highest_combo",
-		"total_kills",
-		"combo_timer",
-		"combo_bump_timer",
-		"spawn_timer",
-		"shake_amt",
-		"shake_frames",
-		"shake_x",
-		"shake_y",
-		"screen_shake_y",
-		"screen_shake_frames",
-		"combo5_shown",
-		"combo10_shown",
-		"kills50_shown",
-		"kills100_shown",
-		"kills200_shown"
-	}
+	local world_keys = { "scene", "game_time", "lives", "score", "combo", "highest_combo", "total_kills" }
+	local health_snapshot_keys = { "life_id", "player_alive", "killed_by_type", "respawn_started" }
+	local ability_keys = { "ability_type", "energy_started" }
+	local entry_keys = { "id", "active", "x", "y", "born", "type", "ability" }
+	local black_hole_keys = { "active", "x", "y", "born", "absorbed", "exploding", "exploded" }
 	local function copy_health(out)
 		for _, k in ipairs(health_keys) do
 			out[k] = state[k]
@@ -3491,7 +3528,7 @@ do
 		reset_partner = function()
 			prediction, host_inputs, world_buffer = netcode.client(), netcode.host(), netcode.buffer(.1)
 			collision_history = netcode.history(1.25)
-			multiplayer.remote_command, multiplayer.compensated = nil, false
+			multiplayer.remote_command = nil
 			multiplayer.shot = 0
 			multiplayer.local_feedback = netcode.feedback()
 			render_offset_x, render_offset_y, partner_view = 0, 0, nil
@@ -3512,6 +3549,7 @@ do
 				killed_by_type = -1,
 				respawn_invincible = true,
 				respawn_timer = RESPAWN_INVINCIBLE,
+				respawn_started = state.total_time,
 				shoot_timer = 0,
 				trail_timer = 0,
 				trail_count = 0,
@@ -3525,6 +3563,7 @@ do
 				my = partner.player.y
 			}
 			partner.tx, partner.ty, partner.ta = {}, {}, {}
+			partner.trail_life = nil
 		end,
 		remote_input = function(data)
 			host_inputs:receive(data.commands)
@@ -3536,84 +3575,90 @@ do
 					commands[#commands + 1] = command
 				end
 			end
-			return { commands = commands, effects = 1 }
+			return { commands = commands }
 		end,
-		snapshot = function(time, compact_effects)
-			-- Keep the same snapshot pairs used by guest interpolation.
+		snapshot = function(time)
 			collision_history:record(time, enemies)
-			local host_health = {}
-			copy_health(host_health)
-			local world = snapshot_fields(state, world_keys)
-			if compact_effects then
-				for _, key in ipairs { "shake_amt", "shake_frames", "shake_x", "shake_y", "screen_shake_y", "screen_shake_frames", "spawn_timer" } do
-					world[key] = nil
-				end
-			end
-			local abilities = compact_effects and
-				snapshot_fields(powerup, { "entries", "black_holes", "energy_active", "energy_timer", "ability_type" })
-				or
-				snapshot_fields(powerup,
-					{ "entries", "black_holes", "energy_active", "energy_timer", "ability_type", "homing_active",
-						"shield_active", "slow_active", "shield_angle", "nuke_flash_alpha", "nuke_wave_radius",
-						"nuke_wave_alpha", "nuke_fx_active" })
-			abilities.entries, abilities.black_holes = {}, {}
-			for i, entry in ipairs(powerup.entries) do
-				abilities.entries[i] = snapshot_fields(entry,
-					{ "id", "active", "x", "y", "r", "life", "type", "ability" })
-			end
-			for i, bh in ipairs(powerup.black_holes) do
-				abilities.black_holes[i] = snapshot_fields(bh,
-					{ "active", "x", "y", "radius", "pull_strength", "life", "absorbed", "exploding", "explode_timer" })
-			end
+			local abilities = snapshot_fields(powerup, ability_keys)
+			abilities.entries = active_pool(powerup.entries, entry_keys)
+			abilities.black_holes = active_pool(powerup.black_holes, black_hole_keys)
 			return {
-				state = world,
+				state = snapshot_fields(state, world_keys),
 				host_player = player,
-				host_health = host_health,
-				host_tx = trail_x,
-				host_ty = trail_y,
-				host_ta = trail_a,
-				guest = { player = partner.player, health = partner.health, tx = partner.tx, ty = partner.ty, ta = partner.ta },
+				host_health = snapshot_fields(state, health_snapshot_keys),
+				guest = { player = partner.player, health = snapshot_fields(partner.health, health_snapshot_keys) },
 				input_ack = host_inputs.ack,
 				enemies = active_pool(enemies),
-				bullets = active_pool(bullets, {
-					"id", "active", "x", "y", "vx", "vy", "homing", "input_seq", "shot"
-				}),
+				bullets = active_pool(bullets, { "id", "active", "x", "y", "vx", "vy", "homing", "input_seq", "shot" }),
 				powerup = abilities,
-				feedback = compact_effects and {} or snapshot_fields(feedback, { "float_texts", "ticker_msgs", "popup" }),
-				effect_version = compact_effects and 1 or nil
+				simulation_time = state.total_time
 			}
 		end,
 		apply = function(data)
 			local old_x, old_y, was_alive, old_life = player.x + render_offset_x, player.y + render_offset_y,
 				state.player_alive, state.life_id
-			local local_timers = {
-				shoot_timer = state.shoot_timer,
-				trail_timer = state.trail_timer,
-				trail_count = state.trail_count,
-				thrust_particle_timer = state.thrust_particle_timer
-			}
-			local pickups = multiplayer.local_feedback:reconcile(data.input_ack, data.guest.health.life_id,
+			local pickups = multiplayer.local_feedback.pickups
+			for _, e in ipairs(data.events or {}) do
+				local source = e[3]
+				local hit = source == "hit" and e[5]
+				local pickup = source == "pickup" and e[5]
+				local predicted_hit = hit and multiplayer.local_feedback.hits[hit]
+				local predicted_pickup = pickup and pickups[pickup]
+				if e[1] == "hit" then
+					feedback.enemy_hit(e[2], predicted_pickup or predicted_hit and (not e[2].dead or predicted_hit.dead))
+				elseif e[1] == "pickup" then
+					if not predicted_pickup then powerup.pickup_feedback(e[2]) end
+				elseif e[1] == "fx" then
+					ltask.send(particle, "effect", e[2])
+				elseif e[1] == "float" then
+					feedback.spawn_float_text(table.unpack(e[2]))
+				elseif e[1] == "popup" then
+					feedback.show_popup(table.unpack(e[2]))
+				elseif e[1] == "ticker" then
+					feedback.ticker_add(table.unpack(e[2]))
+				elseif e[1] == "shake" then
+					shake(table.unpack(e[2]))
+				elseif e[1] == "grid" then
+					grid_impulse(table.unpack(e[2]))
+				elseif e[1] == "sound" then
+					play_effect(e[2][1], e[2][2])
+				end
+			end
+			multiplayer.local_feedback:reconcile(data.input_ack, data.guest.health.life_id,
 				data.enemies, data.powerup.entries)
+			if data.state.scene ~= state.scene then state.scene_time = 0 end
+			if data.state.combo > state.combo then state.combo_bump_timer = .3 end
+			local ability = data.powerup
+			ability.energy_timer = ability.energy_started > 0
+				and math.max(0, powerup.energy_duration - (data.simulation_time - ability.energy_started)) or 0
+			ability.energy_active = ability.energy_timer > 0
+			ability.homing_active = ability.energy_active and ability.ability_type == 1
+			ability.shield_active = ability.energy_active and ability.ability_type == 2
+			ability.slow_active = ability.energy_active and ability.ability_type == 3
+			ability.shield_angle = ability.shield_active and
+				(data.simulation_time - ability.energy_started) * 4 * math.pi or 0
+			for _, entry in pairs(ability.entries) do
+				local age = math.max(0, data.simulation_time - entry.born)
+				entry.r, entry.life, entry.pulse = 15, math.max(0, 8 - age), age * 5
+			end
+			for _, bh in pairs(ability.black_holes) do
+				bh.radius, bh.pull_strength = math.min(180, 100 + bh.absorbed * 8), 120
+				bh.life, bh.pulse = math.max(0, 8 - (data.simulation_time - bh.born)),
+					((bh.exploding and bh.exploded or data.simulation_time) - bh.born) * 3
+				bh.explode_timer = bh.exploding and data.simulation_time - bh.exploded or 0
+			end
+			apply_pool(powerup.entries, ability.entries)
+			apply_pool(powerup.black_holes, ability.black_holes)
+			data.guest.health.respawn_timer = data.guest.health.respawn_started > 0 and math.max(0,
+				RESPAWN_INVINCIBLE - (data.simulation_time - data.guest.health.respawn_started)) or 0
+			data.guest.health.respawn_invincible = data.guest.health.respawn_timer > 0
+			data.host_health.respawn_timer = data.host_health.respawn_started > 0 and math.max(0,
+				RESPAWN_INVINCIBLE - (data.simulation_time - data.host_health.respawn_started)) or 0
+			data.host_health.respawn_invincible = data.host_health.respawn_timer > 0
 			merge(state, data.state)
-			for i, entry in ipairs(data.powerup.entries) do
-				if powerup.entries[i].id ~= entry.id then powerup.entries[i].pulse = 0 end
-			end
-			for i, bh in ipairs(data.powerup.black_holes) do
-				if bh.active and not powerup.black_holes[i].active then powerup.black_holes[i].pulse = 0 end
-			end
 			merge(powerup, data.powerup)
-			multiplayer.compact_feedback = data.effect_version == 1
-			if data.effect_version == 1 then
-				powerup.homing_active = powerup.energy_active and powerup.ability_type == 1
-				powerup.shield_active = powerup.energy_active and powerup.ability_type == 2
-				powerup.slow_active = powerup.energy_active and powerup.ability_type == 3
-			else
-				merge(feedback, data.feedback)
-			end
 			multiplayer.restore_pickup_feedback()
-			for _, k in ipairs(health_keys) do
-				state[k] = data.guest.health[k]
-			end
+			merge(state, data.guest.health)
 			prediction:reconcile(player, data.guest.player, data.input_ack, state.life_id, state.player_alive,
 				replay_movement)
 			if have_snapshot and was_alive and state.player_alive
@@ -3621,12 +3666,10 @@ do
 				and distance(old_x, old_y, player.x, player.y) < 150 then
 				-- Correct simulation immediately; smooth only its displayed position.
 				render_offset_x, render_offset_y = old_x - player.x, old_y - player.y
-				for k, v in pairs(local_timers) do
-					state[k] = v
-				end
 			else
 				render_offset_x, render_offset_y = 0, 0
-				trail_x, trail_y, trail_a = data.guest.tx, data.guest.ty, data.guest.ta
+				trail_x, trail_y, trail_a = {}, {}, {}
+				state.trail_timer, state.trail_count, state.shoot_timer, state.thrust_particle_timer = 0, 0, 0, 0
 				predicted_bullets = {}
 				if state.player_alive then
 					camera.x = clamp(player.x - W * .5, 0, MAP_W - W)
@@ -3634,12 +3677,10 @@ do
 				end
 			end
 			merge(partner.player, data.host_player)
-			partner.health = data.host_health
-			partner.tx, partner.ty, partner.ta = data.host_tx, data.host_ty, data.host_ta
+			merge(partner.health, data.host_health)
 			apply_pool(enemies, data.enemies)
 			apply_pool(bullets, data.bullets)
-			multiplayer.compensated = data.protocol_version == 1
-			if multiplayer.compensated then
+			do
 				local active_shots = {}
 				for _, bullet in pairs(data.bullets) do
 					if bullet.input_seq then
@@ -3656,41 +3697,6 @@ do
 			world_buffer:push(data.time, data.host_player, data.host_health.life_id, data.enemies, data.bullets,
 				data.input_ack, ltask.counter())
 			have_snapshot = true
-			for _, e in ipairs(data.events or {}) do
-				local source = e[3] or ""
-				local hit = tonumber(source:match "^guest%-hit:(%d+)$")
-				local pickup = tonumber(source:match "^guest%-pickup:(%d+)$")
-				local duplicate_hit = hit and multiplayer.local_feedback.hits[hit]
-					and (e[1] == "fx" or e[1] == "grid" or e[1] == "sound" or e[1] == "shake")
-				local duplicate_pickup = pickup and pickups[pickup]
-					and (e[1] == "sound" or e[1] == "popup" or e[1] == "nuke" or e[1] == "shake" or e[1] == "grid"
-						or e[1] == "fx" and pickups[pickup].type == 0)
-				if duplicate_hit or duplicate_pickup then
-					-- The same effect was already presented at the local collision.
-				elseif source == "guest-motion" or source == "guest-shot" then
-					-- Produced locally once, never again when replaying input.
-				elseif e[1] == "fx" then
-					ltask.send(particle, "effect", e[2])
-				elseif data.effect_version == 1 and e[1] == "float" then
-					feedback.spawn_float_text(table.unpack(e[2]))
-				elseif data.effect_version == 1 and e[1] == "popup" then
-					feedback.show_popup(table.unpack(e[2]))
-				elseif data.effect_version == 1 and e[1] == "ticker" then
-					feedback.ticker_add(table.unpack(e[2]))
-				elseif data.effect_version == 1 and e[1] == "shake" then
-					shake(table.unpack(e[2]))
-				elseif data.effect_version == 1 and e[1] == "screen-shake" then
-					state.screen_shake_frames = e[2]
-				elseif data.effect_version == 1 and e[1] == "nuke" then
-					powerup.nuke_feedback(table.unpack(e[2]))
-				elseif e[1] == "emit" then
-					ltask.send(particle, "emit", e[2])
-				elseif e[1] == "grid" then
-					grid_impulse(table.unpack(e[2]))
-				elseif e[1] == "sound" then
-					play_effect(e[2][1], e[2][2])
-				end
-			end
 		end,
 	}
 	function multiplayer.other_alive()
@@ -3769,7 +3775,6 @@ do
 	end
 
 	function multiplayer.predict_pickups(command)
-		if not multiplayer.compact_feedback then return end
 		for _, entry in ipairs(powerup.entries) do
 			if entry.active and distance(player.x, player.y, entry.x, entry.y) < entry.r + 12 then
 				local effect = multiplayer.local_feedback:collect(entry, command)
@@ -3777,18 +3782,14 @@ do
 					if effect.type == 1 then
 						powerup.activate_ability(effect.ability)
 					else
-						feedback.show_popup("NUKE ACTIVATED!", COLOR_CYAN, 3)
-						powerup.nuke_feedback()
+						powerup.pickup_feedback { type = 0, x = player.x, y = player.y }
 						for _, enemy in pairs(multiplayer.world_view and multiplayer.world_view.enemies or {}) do
 							if enemy.active then
 								multiplayer.local_feedback:hit(enemy, command, true)
-								spawn_explosion(enemy.x, enemy.y, enemy.type, 20 + enemy.type * 8)
+								feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y,
+									cause = "nuke", dead = true }
 							end
 						end
-						spawn_explosion(player.x, player.y, "nuke", 50)
-						shake(8, 20)
-						grid_impulse(player.x, player.y, 600, 400)
-						play_effect(audio.powerup)
 					end
 				end
 			end
@@ -3802,20 +3803,14 @@ do
 		for _, bullet in ipairs(predicted_bullets) do
 			if bullet.active then
 				for _, enemy in pairs(multiplayer.world_view.enemies) do
-					if not multiplayer.local_feedback.hits[enemy.id]
+					local hit = multiplayer.local_feedback.hits[enemy.id]
+					if not (hit and hit.dead)
 						and netcode.projectile_hit(bullet, enemy, enemy) then
 						bullet.active = false
-						if enemy.hp <= 1 then
-							multiplayer.local_feedback:hit(enemy, command)
-							spawn_explosion(enemy.x, enemy.y, enemy.type, 25 + enemy.type * 10)
-							grid_impulse(enemy.x, enemy.y, 120, 50 + enemy.type * 20)
-							play_random_effect(audio.explosion, { volume = .25 })
-						else
-							emit_particles {
-								kind = "hit", x = bullet.x, y = bullet.y,
-								angle = math.atan(bullet.vy, bullet.vx) + math.pi
-							}
-						end
+						multiplayer.local_feedback:hit(enemy, command)
+						feedback.enemy_hit { type = enemy.type, x = enemy.x, y = enemy.y, cause = "bullet",
+							hit_x = bullet.x, hit_y = bullet.y, angle = math.atan(bullet.vy, bullet.vx) + math.pi,
+							dead = enemy.hp <= 1 }
 						break
 					end
 				end
@@ -3825,6 +3820,14 @@ do
 
 	function multiplayer.predict(dt)
 		multiplayer.world_view = world_buffer:advance(dt)
+		if multiplayer.world_view and partner.health.player_alive then
+			local host = multiplayer.world_view.host
+			if partner.trail_life ~= host.id then
+				partner.trail_life = host.id
+				partner.tx, partner.ty, partner.ta = {}, {}, {}
+				partner.health.trail_timer, partner.health.trail_count = 0, 0
+			end
+		end
 		multiplayer.local_feedback:advance(dt, multiplayer.world_view and multiplayer.world_view.enemies)
 		do
 			local command = prediction:record(
@@ -3854,13 +3857,6 @@ do
 		end
 		local factor = math.exp(-20 * dt)
 		render_offset_x, render_offset_y = render_offset_x * factor, render_offset_y * factor
-		if multiplayer.world_view and not multiplayer.compensated then
-			for _, bullet in ipairs(predicted_bullets) do
-				if bullet.input_seq <= multiplayer.world_view.ack then
-					bullet.active = false
-				end
-			end
-		end
 		for _, bh in ipairs(powerup.black_holes) do
 			if bh.active then bh.pulse = bh.pulse + dt * 3 end
 		end
@@ -3894,7 +3890,12 @@ do
 	function multiplayer.draw_partner()
 		if multiplayer.other_alive() then
 			with_partner(function()
-				draw_at(multiplayer.world_view and multiplayer.world_view.host or partner_view)
+				local position = multiplayer.world_view and multiplayer.world_view.host or partner_view
+				if not multiplayer.host and position then
+					local moving = trail_x[1] and distance(position.x, position.y, trail_x[1], trail_y[1]) > .1
+					update_player_feedback(state.frame_dt, position, moving)
+				end
+				draw_at(position)
 			end)
 		end
 	end

@@ -71,23 +71,6 @@ local function apply(base, patch)
 	return result
 end
 
-local function pack_trail(values)
-	local parts = {}
-	for i, value in ipairs(values) do
-		parts[i] = string.pack("<f", value)
-	end
-	return table.concat(parts)
-end
-
-local function unpack_trail(data)
-	assert(#data % 4 == 0 and #data <= 1024, "Invalid player trail")
-	local values = {}
-	for offset = 1, #data, 4 do
-		values[#values + 1] = string.unpack("<f", data, offset)
-	end
-	return values
-end
-
 local function normalize(snapshot)
 	local result = copy(snapshot)
 	result.enemies, result.bullets = {}, {}
@@ -101,12 +84,6 @@ local function normalize(snapshot)
 		result.bullets[slot] = string.pack(BULLET_FORMAT, bullet.id,
 			coordinate(bullet.x), coordinate(bullet.y), coordinate(bullet.vx), coordinate(bullet.vy),
 			bullet.homing and 1 or 0, bullet.input_seq or 0, bullet.shot or 0)
-	end
-	for _, key in ipairs { "host_tx", "host_ty", "host_ta" } do
-		result[key] = pack_trail(snapshot[key])
-	end
-	for _, key in ipairs { "tx", "ty", "ta" } do
-		result.guest[key] = pack_trail(snapshot.guest[key])
 	end
 	return result
 end
@@ -147,12 +124,6 @@ local function expand(snapshot)
 			active = true
 		}
 	end
-	for _, key in ipairs { "host_tx", "host_ty", "host_ta" } do
-		result[key] = unpack_trail(snapshot[key])
-	end
-	for _, key in ipairs { "tx", "ty", "ta" } do
-		result.guest[key] = unpack_trail(snapshot.guest[key])
-	end
 	return result
 end
 
@@ -170,7 +141,6 @@ function M.writer()
 		local current = normalize(snapshot)
 		local base = self.frames[acknowledged]
 		local packet = {
-			version = 1,
 			sequence = snapshot.sequence,
 			base = base and acknowledged or 0,
 			delta = difference(current, base or {})
@@ -185,10 +155,6 @@ end
 function M.reader()
 	local self = { frames = {}, order = {} }
 	function self:decode(packet)
-		if packet.version == nil then
-			return packet
-		end
-		assert(packet.version == 1, "Unsupported snapshot protocol")
 		local base = packet.base == 0 and {} or self.frames[packet.base]
 		if not base then
 			return nil -- Ask for a full snapshot; never apply a broken delta.
@@ -210,8 +176,6 @@ function M.input(commands, acknowledged, event_ack)
 			command.dt, command.buttons, coordinate(command.mx), coordinate(command.my), command.view_time or -1)
 	end
 	return {
-		version = 1,
-		effects = 1,
 		event_ack = event_ack or 0,
 		snapshot_ack = acknowledged,
 		commands = table.concat(parts)
@@ -219,10 +183,6 @@ function M.input(commands, acknowledged, event_ack)
 end
 
 function M.commands(packet)
-	if packet.version == nil then
-		return packet.commands
-	end
-	assert(packet.version == 1, "Unsupported input protocol")
 	local count, offset = string.unpack("<I2", packet.commands)
 	assert(count <= 256 and #packet.commands == 2 + count * string.packsize(INPUT_FORMAT), "Invalid input batch")
 	local commands = {}

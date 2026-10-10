@@ -1,13 +1,11 @@
 local ltask = require "ltask"
 local protocol = require "net_protocol"
-local effects = require "particle_effects"
 
 local M = {}
 
 function M.new(ctx)
 	local net = {
 		host = false,
-		compact_effects = false,
 		started = false,
 		room = nil,
 		rooms = {},
@@ -24,7 +22,7 @@ function M.new(ctx)
 	local event_sequence, event_ack = 0, 0
 	local sent = 0
 	local snapshot_sequence, last_snapshot = 0, 0
-	local peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
+	local snapshot_ack, last_input_sent = 0, 0
 	local writer, reader = protocol.writer(), protocol.reader()
 
 	local function send_failed(kind, reason)
@@ -68,9 +66,10 @@ function M.new(ctx)
 	end
 
 	function net.record(kind, body)
-		if net.host and net.started then
+		if net.host and net.started and not net.local_effects
+			and net.effect_source ~= "guest-motion" and net.effect_source ~= "guest-shot" then
 			event_sequence = event_sequence + 1
-			net.events[#net.events + 1] = { kind, body, net.effect_source, event_sequence }
+			net.events[#net.events + 1] = { kind, body, net.effect_source, event_sequence, net.effect_id }
 			if #net.events > 512 then
 				table.remove(net.events, 1)
 			end
@@ -98,7 +97,7 @@ function M.new(ctx)
 			else
 				net.room = body
 				net.host = body.host
-				net.started = body.started
+				if not body.started then net.started = false end
 			end
 		elseif kind == 34 then
 			net.host = body.host
@@ -106,8 +105,7 @@ function M.new(ctx)
 			net.error = ""
 			snapshot_sequence = 0
 			last_snapshot = 0
-			peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
-			net.compact_effects = false
+			snapshot_ack, last_input_sent = 0, 0
 			event_sequence, event_ack = 0, 0
 			net.events = {}
 			writer, reader = protocol.writer(), protocol.reader()
@@ -123,32 +121,27 @@ function M.new(ctx)
 			net.events = {}
 		elseif kind == 2 and net.host then
 			local commands = protocol.commands(body)
-			net.compact_effects = body.effects == 1
-			if net.compact_effects and type(body.event_ack) == "number" and body.event_ack <= event_sequence then
+			if type(body.event_ack) == "number" and body.event_ack <= event_sequence then
 				while net.events[1] and net.events[1][4] <= body.event_ack do
 					table.remove(net.events, 1)
 				end
 			end
-			if body.version == 1 then
-				peer_protocol = 1
-				snapshot_ack = body.snapshot_ack
-			end
+			snapshot_ack = body.snapshot_ack
 			ctx.remote_input { commands = commands }
 		elseif kind == 3 and not net.host and body.sequence > last_snapshot then
 			local snapshot = reader:decode(body)
 			if snapshot then
 				last_snapshot, snapshot_ack = body.sequence, body.sequence
-				peer_protocol = snapshot.protocol_version or 0
-				if snapshot.effect_version == 1 then
-					local events = {}
-					for _, event in ipairs(snapshot.events or {}) do
-						if event[4] > event_ack then
-							events[#events + 1] = event
-							event_ack = event[4]
-						end
+				local events, count = snapshot.events or {}, 0
+				for _, event in ipairs(events) do
+					if event[4] > event_ack then
+						count = count + 1
+						events[count] = event
+						event_ack = event[4]
 					end
-					snapshot.events = events
 				end
+				for i = #events, count + 1, -1 do events[i] = nil end
+				snapshot.events = events
 				ctx.apply(snapshot)
 			else
 				snapshot_ack = 0
@@ -194,47 +187,25 @@ function M.new(ctx)
 		end
 		sent = time
 		if net.host then
-			local snapshot = ctx.snapshot(time, net.compact_effects)
+			local snapshot = ctx.snapshot(time)
 			snapshot.events = net.events
-			if not net.compact_effects then
-				-- Cached clients still consume the previous emitter format.
-				snapshot.events = {}
-				for i, event in ipairs(net.events) do
-					snapshot.events[i] = event[1] == "fx"
-						and { "emit", effects.emitter(event[2]), event[3], event[4] } or event
-				end
-			end
 			snapshot_sequence = snapshot_sequence + 1
-			snapshot.sequence = snapshot_sequence
-			snapshot.time = time
-			-- Negotiate in a legacy snapshot so cached older clients still work.
-			snapshot.protocol_version = 1
-			local packet = snapshot
-			if peer_protocol == 1 then
-				local ok, encoded = pcall(writer.encode, writer, snapshot, force_full and 0 or snapshot_ack)
-				if not ok then
-					send_failed(3, tostring(encoded))
-					return
-				end
-				packet = encoded
+			snapshot.sequence, snapshot.time = snapshot_sequence, time
+			local ok, packet = pcall(writer.encode, writer, snapshot, force_full and 0 or snapshot_ack)
+			if not ok then
+				send_failed(3, tostring(packet))
+				return
 			end
 			force_full = false
 			if send(3, packet, true) then
-				if not net.compact_effects then net.events = {} end
 				pending_send = true
-				sent = time
 			end
 		else
-			local input = ctx.local_input(peer_protocol == 1 and last_input_sent or 0)
-			input.event_ack = event_ack
-			local packet = input
-			if peer_protocol == 1 then
-				local ok, encoded = pcall(protocol.input, input.commands, snapshot_ack, event_ack)
-				if not ok then
-					send_failed(2, tostring(encoded))
-					return
-				end
-				packet = encoded
+			local input = ctx.local_input(last_input_sent)
+			local ok, packet = pcall(protocol.input, input.commands, snapshot_ack, event_ack)
+			if not ok then
+				send_failed(2, tostring(packet))
+				return
 			end
 			if send(2, packet, true) then
 				-- WebSocket delivers these batches in order; retain inputs locally for
@@ -242,7 +213,6 @@ function M.new(ctx)
 				local last = input.commands[#input.commands]
 				last_input_sent = last and last.seq or last_input_sent
 				pending_send = true
-				sent = time
 			end
 		end
 	end

@@ -10,9 +10,11 @@ interface Listing extends Record<string, number> {
 
 interface Seat {
   host: boolean
+  version: number
 }
 
 const RESERVED_MS = 30000
+const UPDATE_CLIENT = '请更新客户端版本'
 
 function send(socket: WebSocket, kind: number, body: Value) {
   socket.send(packet(kind, body))
@@ -68,9 +70,9 @@ export class Lobby extends DurableObject<Env> {
     }
   }
 
-  async fetch(): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const [socket, response] = accept(this.ctx)
-    socket.serializeAttachment({ redirected: false })
+    socket.serializeAttachment({ redirected: false, version: Number(new URL(request.url).searchParams.get('version')) })
     send(socket, 32, this.listing())
     return response
   }
@@ -89,7 +91,7 @@ export class Lobby extends DurableObject<Env> {
         return
       }
 
-      const attachment = socket.deserializeAttachment() as { redirected: boolean }
+      const attachment = socket.deserializeAttachment() as { redirected: boolean, version: number }
       if (attachment.redirected) {
         return
       }
@@ -116,10 +118,15 @@ export class Lobby extends DurableObject<Env> {
         }
       }
 
-      socket.serializeAttachment({ redirected: true })
-      const ticket = await this.env.ROOM.getByName(String(id)).reserve(id, kind === 17)
+      socket.serializeAttachment({ ...attachment, redirected: true })
+      const ticket = await this.env.ROOM.getByName(String(id)).reserve(id, kind === 17, attachment.version)
+      if (ticket === '') {
+        socket.serializeAttachment({ ...attachment, redirected: false })
+        send(socket, 35, UPDATE_CLIENT)
+        return
+      }
       if (!ticket) {
-        socket.serializeAttachment({ redirected: false })
+        socket.serializeAttachment({ ...attachment, redirected: false })
         send(socket, 35, 'Room unavailable')
         return
       }
@@ -175,7 +182,7 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  async reserve(id: number, host: boolean): Promise<string | null> {
+  async reserve(id: number, host: boolean, version: number): Promise<string | null> {
     this.ctx.storage.sql.exec('DELETE FROM tickets WHERE expires < ?', Date.now())
     const reserved = this.ctx.storage.sql.exec<{ host: number }>('SELECT host FROM tickets').toArray()
     if (this.started || this.players.size + reserved.length >= 2) {
@@ -186,6 +193,13 @@ export class Room extends DurableObject<Env> {
     }
     if (!host && ![...this.players.values()].some(seat => seat.host)) {
       return null
+    }
+
+    for (const [socket, seat] of this.players) {
+      if (seat.version !== version) {
+        send(socket, 35, UPDATE_CLIENT)
+        return ''
+      }
     }
 
     this.ctx.storage.sql.exec('INSERT OR IGNORE INTO room (id) VALUES (?)', id)
@@ -211,7 +225,7 @@ export class Room extends DurableObject<Env> {
     }
 
     const [socket, response] = accept(this.ctx)
-    const seat = { host: reservation.host !== 0 }
+    const seat = { host: reservation.host !== 0, version: Number(new URL(request.url).searchParams.get('version')) }
     socket.serializeAttachment(seat)
     this.players.set(socket, seat)
     await this.changed()

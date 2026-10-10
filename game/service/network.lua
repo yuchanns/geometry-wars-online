@@ -4,6 +4,7 @@ local codec = require "net_codec"
 
 global ipairs, pcall, string, table, tostring
 
+local CLIENT_VERSION <const> = 2
 local MAX_QUEUE <const> = 64
 local RECONNECT_DELAY <const> = 2 -- ltask.now() first returns seconds.
 local S = {}
@@ -76,7 +77,8 @@ local function deliver(state, reason)
 				redirect = endpoint
 			else
 				redirect = endpoint:gsub("%?.*$", "") ..
-					"?room=" .. string.format("%.0f", body.room) .. "&ticket=" .. body.ticket
+					"?room=" ..
+					string.format("%.0f", body.room) .. "&ticket=" .. body.ticket .. "&version=" .. CLIENT_VERSION
 			end
 		end
 		messages[#messages + 1] = { data:byte(1), body }
@@ -121,7 +123,8 @@ local function tick()
 end
 
 function S.connect(address, url)
-	owner, endpoint = address, url
+	owner = address
+	endpoint = url .. (url:find("?", 1, true) and "&" or "?") .. "version=" .. CLIENT_VERSION
 	connect()
 end
 

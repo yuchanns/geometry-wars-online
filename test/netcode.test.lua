@@ -81,19 +81,12 @@ do
 		return {
 			sequence = sequence,
 			time = sequence / 15,
-			protocol_version = 1,
 			state = { lives = 6, score = 0, scene = "combat", game_time = sequence / 15 },
 			host_player = { x = 500, y = 500, angle = 0 },
 			host_health = { player_alive = true, life_id = 0 },
-			host_tx = { 1, 2 },
-			host_ty = { 3, 4 },
-			host_ta = { 0, 1 },
 			guest = {
 				player = { x = 555, y = 500, angle = 0 },
-				health = { life_id = 0, player_alive = true },
-				tx = {},
-				ty = {},
-				ta = {}
+				health = { life_id = 0, player_alive = true }
 			},
 			input_ack = 1,
 			enemies = {
@@ -159,8 +152,7 @@ do
 	end
 	assert(#writer.order == 64 and #reader.order == 64)
 	assert(writer:encode(snapshot(101), 1).base == 0, "An evicted baseline did not recover")
-	assert(protocol.reader():decode(first) == first, "Legacy snapshots no longer work")
-	-- Ordinary thrust changes must remain encodable for cached clients too.
+	-- Deeply nested particle changes must remain encodable.
 	local effects = require "particle_effects"
 	local particle_writer, particle_reader = protocol.writer(), protocol.reader()
 	for sequence = 1, 20 do
@@ -192,8 +184,8 @@ do
 	local compact = #codec.encode(protocol.input({ client.pending[60] }, 100))
 	local old = #codec.encode { commands = client.pending }
 	assert(compact < old / 10, "Input packets still retransmit pending history")
-	assert(not pcall(protocol.commands, { version = 1, commands = "\1\0" }), "Truncated commands accepted")
-	assert(not pcall(protocol.commands, { version = 2, commands = "\0\0" }), "Unknown protocol accepted")
+	assert(not pcall(protocol.commands, { commands = "\1\0" }), "Truncated commands accepted")
+
 	print(string.format(
 		"PASS: acknowledged deltas, missing-baseline recovery, compact pools, ordered inputs (%d vs %d bytes)",
 		compact, old))
@@ -618,21 +610,16 @@ do
 		apply = function(snapshot)
 			applied = snapshot
 		end,
-		snapshot = function(_, effects)
+		snapshot = function()
 			return {
-				effect_version = effects and 1 or nil,
 				state = {},
 				host_player = {},
 				host_health = {},
-				host_tx = {},
-				host_ty = {},
-				host_ta = {},
-				guest = { player = {}, health = {}, tx = {}, ty = {}, ta = {} },
+				guest = { player = {}, health = {} },
 				input_ack = 0,
 				enemies = {},
 				bullets = {},
-				powerup = {},
-				feedback = {}
+				powerup = {}
 			}
 		end
 	}
@@ -646,14 +633,11 @@ do
 		return packets[#packets][2]
 	end
 	local host = online.new(ctx)
+	deliver(host, 33, { count = 2, host = true, started = true })
+	assert(not host.started, "Room state started publishing before the start packet reset its sequence")
 	deliver(host, 34, { host = true })
 	local first = publish(host, 2)
-	assert(first.version == nil and first.protocol_version == 1, "A new host broke the legacy handshake")
-	deliver(host, 2, { commands = {} })
-	assert(publish(host, 3).version == nil, "A legacy guest received an unsupported compact snapshot")
-	deliver(host, 2, protocol.input({}, 0))
-	local compact = publish(host, 4)
-	assert(compact.version == 1 and protocol.reader():decode(compact).sequence == 3)
+	assert(first.base == 0 and protocol.reader():decode(first).sequence == 1)
 	host.record("fx", { kind = "thrust", x = 100, y = 200, style = "normal" })
 	local effect_first = publish(host, 4.1)
 	local effect_repeat = publish(host, 4.2)
@@ -664,17 +648,13 @@ do
 	assert(#effect_reader:decode(publish(host, 4.3)).events == 0, "Acknowledged effects kept replaying")
 	local guest = online.new(ctx)
 	deliver(guest, 34, { host = false })
-	first.protocol_version = nil -- The cached old host has no capability advertisement.
 	deliver(guest, 3, first)
-	assert(applied.sequence == 1 and publish(guest, 2).version == nil, "A new guest broke a legacy host")
-	first.sequence, first.protocol_version = 2, 1
-	deliver(guest, 3, first)
-	assert(publish(guest, 3).version == 1, "Mutually supported compact inputs were not enabled")
+	assert(applied.sequence == 1 and type(publish(guest, 2).commands) == "string")
 	deliver(guest, 3, effect_first)
 	assert(#applied.events == 1)
 	deliver(guest, 3, effect_repeat)
 	assert(#applied.events == 0 and publish(guest, 4).event_ack == event_id,
 		"Repeated snapshot effects were presented more than once")
 	package.loaded.ltask, package.loaded.online = old_ltask, nil
-	print "PASS: new/legacy host and guest protocol negotiation"
+	print "PASS: compact snapshots and inputs, retained effects and acknowledgement deduplication"
 end

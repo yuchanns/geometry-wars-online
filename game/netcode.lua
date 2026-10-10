@@ -151,8 +151,10 @@ end
 function M.feedback()
 	local self = { hits = {}, pickups = {}, seen = {}, order = 0 }
 	function self:hit(enemy, command, lethal)
-		if (lethal or enemy.hp <= 1) and not self.hits[enemy.id] then
-			self.hits[enemy.id] = { seq = command.seq, life = command.life, age = 0 }
+		local dead = lethal or enemy.hp <= 1
+		local previous = self.hits[enemy.id]
+		if not previous or dead and not previous.dead then
+			self.hits[enemy.id] = { seq = command.seq, life = command.life, age = 0, dead = dead }
 		end
 	end
 
