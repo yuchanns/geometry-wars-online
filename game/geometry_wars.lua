@@ -4281,15 +4281,17 @@ do
 
 	function game.over()
 		state.set_scene_hooks(draw_game_over_world, draw_game_over_overlay)
+		local finishing = false
 		while true do
 			if not multiplayer.started then
 				return "online"
 			elseif state.round ~= multiplayer.round then
 				return "reset"
 			end
-			if state.scene_time > 2.0 and confirm_requested() then
+			if not finishing and state.scene_time > 2.0 and confirm_requested() then
 				multiplayer.finish()
-				return "online"
+				-- Stay here until the server ends the round; started is still true.
+				finishing = true
 			end
 			update_game_over_scene(state.frame_dt)
 			flow.sleep(0)

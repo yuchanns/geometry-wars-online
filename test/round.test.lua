@@ -13,11 +13,14 @@ local coroutine_source = read("3rd/soluna/src/lualib/coroutine.lua"):gsub("globa
 package.loaded["soluna.coroutine"] = assert(load(coroutine_source, "@soluna/coroutine.lua", "t",
 	setmetatable({}, { __index = _G })))()
 local delivery
+local sent
 package.loaded.ltask = {
 	uniqueservice = function() return 1 end,
 	self = function() return 2 end,
 	dispatch = function(handlers) delivery = handlers._network_update end,
-	send = function() end,
+	send = function(_, command, kind)
+		if command == "send" then sent[#sent + 1] = kind end
+	end,
 }
 local online = require "online"
 local source = read("game/geometry_wars.lua")
@@ -25,23 +28,31 @@ local first = assert(source:find("\tlocal function reset()", 1, true))
 local last = assert(source:find("\n\tflow.load(game)", first, true))
 local scenes = source:sub(first, last - 1) .. "\nreturn game"
 
-local function setup()
+local function setup(host)
+	sent = {}
 	local flow = assert(loadfile("game/flow.lua"))()
 	local state = {
 		scene = "over", scene_time = .25, frame_dt = 1 / 60,
 		player_alive = true, lives = 6, score = 0, best_score = 0, best_time = 0,
 		game_time = 0, total_kills = 0, highest_combo = 0,
 		set_scene_hooks = function() end,
+		center_camera = function() end,
 	}
 	local updates, resets = 0, 0
+	local confirmed = false
 	local net = online.new { endpoint = "wss://test.example/ws", reset_partner = function() end }
 	local env = setmetatable({
 		state = state, multiplayer = net, flow = flow,
 		ensure_runtime_pools = function() end,
 		clear_runtime_state = function() resets = resets + 1 end,
 		init_starfield = function() end, init_grid = function() end,
-		confirm_requested = function() return false end,
+		confirm_requested = function()
+			local value = confirmed
+			confirmed = false
+			return value
+		end,
 		handle_combat_debug_keys = function() end,
+		update_title_scene = function() end,
 		update_combat_scene = function() updates = updates + 1 end,
 		update_death_scene = function() end, update_game_over_scene = function() end,
 	}, { __index = _G })
@@ -51,9 +62,10 @@ local function setup()
 		delivery("open", "", messages)
 		net.poll()
 	end
-	packets { { 34, { host = false } } }
+	packets { { 34, { host = host == true } } }
 	state.round = net.round
-	return flow, net, state, packets, function() return updates, resets end
+	return flow, net, state, packets, function() return updates, resets end,
+		function() confirmed = true end
 end
 
 for _, scene in ipairs { "combat", "death", "over" } do
@@ -76,6 +88,33 @@ for _, scene in ipairs { "combat", "death", "over" } do
 	assert(updates > 0 and resets == 1, "New round did not resume gameplay exactly once")
 end
 print "PASS: batched finish/start updates reset guests in combat, death and game over"
+
+for _, host in ipairs { true, false } do
+	local flow, net, state, packets, counts, confirm = setup(host)
+	state.scene_time = 3
+	flow.enter("over")
+	confirm()
+	-- Finishing is asynchronous: keep game over until the room acknowledges it.
+	assert(flow.update() == "over", "Continue left game over before the finish acknowledgement")
+	for _ = 1, 180 do
+		confirm()
+		assert(flow.update() == "over", "Waiting for finish re-entered combat or the lobby")
+	end
+	assert(#sent == 1 and sent[1] == 21, "Repeated confirmation resent the finish request")
+	local updates, resets = counts()
+	assert(updates == 0 and resets == 0, "Finish reset or advanced the game before acknowledgement")
+	packets { { 33, { id = 1, count = 2, host = host, started = false } } }
+	assert(flow.update() == "online", "Finish acknowledgement did not return to the lobby")
+	for _ = 1, 10 do
+		assert(flow.update() == "online", "Lobby restarted without a new start packet")
+	end
+	packets { { 34, { host = host } } }
+	assert(flow.update() == "reset" and flow.update() == "combat", "Explicit start did not begin the next game")
+	flow.update()
+	updates, resets = counts()
+	assert(updates == 1 and resets == 1, "Explicit start did not reset gameplay exactly once")
+end
+print "PASS: host and guest wait for finish acknowledgement without a phantom restart"
 
 -- Execute the complete production snapshot callback and local scene hook.
 -- Host snapshots must not take ownership of guest scene timers or music.
