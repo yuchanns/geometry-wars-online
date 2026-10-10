@@ -1,4 +1,5 @@
 local ltask = require "ltask"
+local effects = require "particle_effects"
 local spritemgr = require "soluna.spritemgr"
 local matradial = require "ext.material.radial_shape"
 
@@ -296,7 +297,14 @@ function S.frame(next_frame)
 	frame.screen_shake_y = shake.screen_y or 0.0
 end
 
-S.emit = emit
+S.emit = emit -- Older peers still send emitter descriptions.
+
+function S.effect(event)
+	local emitter = effects.emitter(event)
+	if emitter then
+		emit(emitter)
+	end
+end
 
 function S.clear()
 	clear_particles()

@@ -7,7 +7,7 @@ import { decode, packet } from '../src/codec.ts'
 
 const endpoint = process.env.GAME_SERVER || 'ws://127.0.0.1:8789/ws'
 
-async function createPeer() {
+async function createPeer(version = 2) {
   let socket
   let stopped = false
   let observer
@@ -25,6 +25,7 @@ async function createPeer() {
       const message = { kind: data[0], body: decode(data.subarray(1)) }
       if (message.kind === 36) {
         const destination = new URL(endpoint)
+        destination.searchParams.set('version', version)
         if (message.body.room) {
           destination.searchParams.set('room', message.body.room)
           destination.searchParams.set('ticket', message.body.ticket)
@@ -37,7 +38,9 @@ async function createPeer() {
     })
   }
 
-  connect(endpoint)
+  const initial = new URL(endpoint)
+  initial.searchParams.set('version', version)
+  connect(initial)
   await new Promise((resolve, reject) => {
     socket.once('open', resolve)
     socket.once('error', reject)
@@ -128,4 +131,20 @@ test('Worker rooms require two players, isolate games, and recover after a playe
   host.send(19)
   await host.waitFor(33, body => body.count === 0)
   await host.waitFor(32, body => Object.values(body).every(item => item.id !== room.id))
+})
+
+test('Different client versions cannot share a room and both receive the update prompt', async (context) => {
+  const host = await createPeer(2)
+  const guest = await createPeer(3)
+  context.after(() => host.close())
+  context.after(() => guest.close())
+  host.send(17)
+  const room = await host.waitFor(33, body => body.count === 1)
+  await guest.waitFor(32, body => Object.values(body).some(item => item.id === room.id))
+  guest.send(18, room.id)
+  assert.equal(await guest.waitFor(35), 'Please update your client')
+  assert.equal(await host.waitFor(35), 'Please update your client')
+  assert.equal(host.messages.some(message => message.kind === 33 && message.body.count === 2), false)
+  guest.send(17)
+  assert.equal((await guest.waitFor(33, body => body.count === 1)).host, true)
 })

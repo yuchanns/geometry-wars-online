@@ -21,12 +21,20 @@ local function copy(value)
 	return result
 end
 
-local function difference(value, base)
+local function difference(value, base, depth)
+	depth = depth or 0
 	local patch = { set = {}, remove = {}, edit = {} }
 	for key, item in pairs(value) do
 		local old = base[key]
 		if type(item) == "table" and type(old) == "table" then
-			patch.edit[key] = difference(item, old)
+			local edit = difference(item, old, depth + 1)
+			if edit and depth >= 2 then
+				-- Deep edits multiply wire nesting. Replace the changed subtree
+				-- instead, keeping particle parameters within the codec limit.
+				patch.set[key] = copy(item)
+			else
+				patch.edit[key] = edit
+			end
 		elseif item ~= old then
 			patch.set[key] = copy(item)
 		end
@@ -63,23 +71,6 @@ local function apply(base, patch)
 	return result
 end
 
-local function pack_trail(values)
-	local parts = {}
-	for i, value in ipairs(values) do
-		parts[i] = string.pack("<f", value)
-	end
-	return table.concat(parts)
-end
-
-local function unpack_trail(data)
-	assert(#data % 4 == 0 and #data <= 1024, "Invalid player trail")
-	local values = {}
-	for offset = 1, #data, 4 do
-		values[#values + 1] = string.unpack("<f", data, offset)
-	end
-	return values
-end
-
 local function normalize(snapshot)
 	local result = copy(snapshot)
 	result.enemies, result.bullets = {}, {}
@@ -93,12 +84,6 @@ local function normalize(snapshot)
 		result.bullets[slot] = string.pack(BULLET_FORMAT, bullet.id,
 			coordinate(bullet.x), coordinate(bullet.y), coordinate(bullet.vx), coordinate(bullet.vy),
 			bullet.homing and 1 or 0, bullet.input_seq or 0, bullet.shot or 0)
-	end
-	for _, key in ipairs { "host_tx", "host_ty", "host_ta" } do
-		result[key] = pack_trail(snapshot[key])
-	end
-	for _, key in ipairs { "tx", "ty", "ta" } do
-		result.guest[key] = pack_trail(snapshot.guest[key])
 	end
 	return result
 end
@@ -139,12 +124,6 @@ local function expand(snapshot)
 			active = true
 		}
 	end
-	for _, key in ipairs { "host_tx", "host_ty", "host_ta" } do
-		result[key] = unpack_trail(snapshot[key])
-	end
-	for _, key in ipairs { "tx", "ty", "ta" } do
-		result.guest[key] = unpack_trail(snapshot.guest[key])
-	end
 	return result
 end
 
@@ -162,7 +141,6 @@ function M.writer()
 		local current = normalize(snapshot)
 		local base = self.frames[acknowledged]
 		local packet = {
-			version = 1,
 			sequence = snapshot.sequence,
 			base = base and acknowledged or 0,
 			delta = difference(current, base or {})
@@ -177,10 +155,6 @@ end
 function M.reader()
 	local self = { frames = {}, order = {} }
 	function self:decode(packet)
-		if packet.version == nil then
-			return packet
-		end
-		assert(packet.version == 1, "Unsupported snapshot protocol")
 		local base = packet.base == 0 and {} or self.frames[packet.base]
 		if not base then
 			return nil -- Ask for a full snapshot; never apply a broken delta.
@@ -195,20 +169,20 @@ function M.reader()
 	return self
 end
 
-function M.input(commands, acknowledged)
+function M.input(commands, acknowledged, event_ack)
 	local parts = { string.pack("<I2", #commands) }
 	for _, command in ipairs(commands) do
 		parts[#parts + 1] = string.pack(INPUT_FORMAT, command.seq, command.life,
 			command.dt, command.buttons, coordinate(command.mx), coordinate(command.my), command.view_time or -1)
 	end
-	return { version = 1, snapshot_ack = acknowledged, commands = table.concat(parts) }
+	return {
+		event_ack = event_ack or 0,
+		snapshot_ack = acknowledged,
+		commands = table.concat(parts)
+	}
 end
 
 function M.commands(packet)
-	if packet.version == nil then
-		return packet.commands
-	end
-	assert(packet.version == 1, "Unsupported input protocol")
 	local count, offset = string.unpack("<I2", packet.commands)
 	assert(count <= 256 and #packet.commands == 2 + count * string.packsize(INPUT_FORMAT), "Invalid input batch")
 	local commands = {}

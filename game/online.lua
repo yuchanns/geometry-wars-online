@@ -18,10 +18,25 @@ function M.new(ctx)
 	local network = ltask.uniqueservice "network"
 	local inbox
 	local pending_send = false
+	local force_full, send_error = false, nil
+	local event_sequence, event_ack = 0, 0
 	local sent = 0
 	local snapshot_sequence, last_snapshot = 0, 0
-	local peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
+	local snapshot_ack, last_input_sent = 0, 0
 	local writer, reader = protocol.writer(), protocol.reader()
+
+	local function send_failed(kind, reason)
+		pending_send = false
+		if kind == 3 then
+			force_full = true
+		elseif kind == 2 then
+			last_input_sent = 0
+		end
+		if send_error ~= reason then
+			print("Packet send failed: " .. reason)
+		end
+		send_error, net.error = reason, reason
+	end
 
 	-- Acknowledge after the frame consumes this batch, bounding the inbox.
 	ltask.dispatch {
@@ -34,7 +49,12 @@ function M.new(ctx)
 		end,
 		_network_sent = function()
 			pending_send = false
+			if send_error and net.error == send_error then
+				net.error = ""
+			end
+			send_error = nil
 		end,
+		_network_send_failed = send_failed,
 	}
 
 	local function send(kind, body, frame)
@@ -46,8 +66,13 @@ function M.new(ctx)
 	end
 
 	function net.record(kind, body)
-		if net.host and net.started then
-			net.events[#net.events + 1] = { kind, body, net.effect_source }
+		if net.host and net.started and not net.local_effects
+			and net.effect_source ~= "guest-motion" and net.effect_source ~= "guest-shot" then
+			event_sequence = event_sequence + 1
+			net.events[#net.events + 1] = { kind, body, net.effect_source, event_sequence, net.effect_id }
+			if #net.events > 512 then
+				table.remove(net.events, 1)
+			end
 		end
 	end
 
@@ -72,7 +97,7 @@ function M.new(ctx)
 			else
 				net.room = body
 				net.host = body.host
-				net.started = body.started
+				if not body.started then net.started = false end
 			end
 		elseif kind == 34 then
 			net.host = body.host
@@ -80,8 +105,11 @@ function M.new(ctx)
 			net.error = ""
 			snapshot_sequence = 0
 			last_snapshot = 0
-			peer_protocol, snapshot_ack, last_input_sent = 0, 0, 0
+			snapshot_ack, last_input_sent = 0, 0
+			event_sequence, event_ack = 0, 0
+			net.events = {}
 			writer, reader = protocol.writer(), protocol.reader()
+			force_full, send_error = false, nil
 			ctx.reset_partner()
 			print("Room started / " .. (net.host and "host" or "guest"))
 		elseif kind == 35 then
@@ -93,16 +121,27 @@ function M.new(ctx)
 			net.events = {}
 		elseif kind == 2 and net.host then
 			local commands = protocol.commands(body)
-			if body.version == 1 then
-				peer_protocol = 1
-				snapshot_ack = body.snapshot_ack
+			if type(body.event_ack) == "number" and body.event_ack <= event_sequence then
+				while net.events[1] and net.events[1][4] <= body.event_ack do
+					table.remove(net.events, 1)
+				end
 			end
+			snapshot_ack = body.snapshot_ack
 			ctx.remote_input { commands = commands }
 		elseif kind == 3 and not net.host and body.sequence > last_snapshot then
 			local snapshot = reader:decode(body)
 			if snapshot then
 				last_snapshot, snapshot_ack = body.sequence, body.sequence
-				peer_protocol = snapshot.protocol_version or 0
+				local events, count = snapshot.events or {}, 0
+				for _, event in ipairs(events) do
+					if event[4] > event_ack then
+						count = count + 1
+						events[count] = event
+						event_ack = event[4]
+					end
+				end
+				for i = #events, count + 1, -1 do events[i] = nil end
+				snapshot.events = events
 				ctx.apply(snapshot)
 			else
 				snapshot_ack = 0
@@ -146,30 +185,34 @@ function M.new(ctx)
 		if not net.started or pending_send or time - sent < interval then
 			return
 		end
+		sent = time
 		if net.host then
 			local snapshot = ctx.snapshot(time)
 			snapshot.events = net.events
 			snapshot_sequence = snapshot_sequence + 1
-			snapshot.sequence = snapshot_sequence
-			snapshot.time = time
-			-- Negotiate in a legacy snapshot so cached older clients still work.
-			snapshot.protocol_version = 1
-			local packet = peer_protocol == 1 and writer:encode(snapshot, snapshot_ack) or snapshot
+			snapshot.sequence, snapshot.time = snapshot_sequence, time
+			local ok, packet = pcall(writer.encode, writer, snapshot, force_full and 0 or snapshot_ack)
+			if not ok then
+				send_failed(3, tostring(packet))
+				return
+			end
+			force_full = false
 			if send(3, packet, true) then
-				net.events = {}
 				pending_send = true
-				sent = time
 			end
 		else
-			local input = ctx.local_input(peer_protocol == 1 and last_input_sent or 0)
-			local packet = peer_protocol == 1 and protocol.input(input.commands, snapshot_ack) or input
+			local input = ctx.local_input(last_input_sent)
+			local ok, packet = pcall(protocol.input, input.commands, snapshot_ack, event_ack)
+			if not ok then
+				send_failed(2, tostring(packet))
+				return
+			end
 			if send(2, packet, true) then
 				-- WebSocket delivers these batches in order; retain inputs locally for
 				-- reconciliation, but do not retransmit the whole pending history.
 				local last = input.commands[#input.commands]
 				last_input_sent = last and last.seq or last_input_sent
 				pending_send = true
-				sent = time
 			end
 		end
 	end
@@ -211,6 +254,7 @@ function M.new(ctx)
 		end
 		if not net.connected then
 			ctx.text(0, 230, "CONNECTING...", 12, 0xff79c8ff, "C", 800)
+			ctx.text(0, 540, net.error, 8, 0xffff554a, "C", 800)
 			return
 		end
 		if net.room then
