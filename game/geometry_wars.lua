@@ -884,6 +884,14 @@ local audio = {
 	death = "explosion_01",
 	game_over = "explosion_02",
 }
+if audio.pending then
+	ltask.dispatch {
+		_audio_ready = function()
+			audio.pending = false
+		end,
+	}
+	ltask.spawn("audio_loader", ltask.self())
+end
 local trail_x = {}
 local trail_y = {}
 local trail_a = {}
@@ -1134,13 +1142,6 @@ local function enemy_color(enemy_type)
 	return def and def.color or COLOR_WHITE
 end
 
-function audio.ready()
-	if audio.pending and (require "soluna.file").local_exist "/sound.ready" then
-		audio.pending = false
-	end
-	return not audio.pending
-end
-
 local function stop_music(fade_seconds)
 	local voice = audio.music_voice
 	audio.music_voice = nil
@@ -1151,7 +1152,7 @@ local function stop_music(fade_seconds)
 end
 
 local function ensure_music_playing()
-	if not audio.ready() then
+	if audio.pending then
 		return
 	end
 	local voice = audio.music_voice
@@ -1169,7 +1170,7 @@ local function play_effect(name, opts)
 	if multiplayer and not multiplayer.local_effects then
 		multiplayer.record("sound", { name, opts or {} })
 	end
-	if not audio.ready() then
+	if audio.pending then
 		return
 	end
 	local voice, err = soluna.play_sound(name, opts)
