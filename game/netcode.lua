@@ -153,7 +153,12 @@ function M.feedback()
 	function self:hit(enemy, command, lethal)
 		local dead = lethal or enemy.hp <= 1
 		local previous = self.hits[enemy.id]
-		if not previous or dead and not previous.dead then
+		-- A nuke is a new prediction, even if an earlier shot hid this enemy.
+		-- Keep an already confirmed death tied to its confirming snapshot.
+		if lethal and previous and previous.confirmed then
+			return
+		end
+		if lethal or not previous or dead and not previous.dead then
 			self.hits[enemy.id] = { seq = command.seq, life = command.life, age = 0, dead = dead }
 		end
 	end
@@ -185,7 +190,7 @@ function M.feedback()
 		return latest
 	end
 
-	function self:advance(dt, visible)
+	function self:advance(dt, visible, visible_ack)
 		local ids = {}
 		for _, enemy in pairs(visible or {}) do
 			if enemy.active then
@@ -194,15 +199,15 @@ function M.feedback()
 		end
 		for id, effect in pairs(self.hits) do
 			effect.age = effect.age + dt
-			if effect.confirmed and not ids[id] or effect.age > 1.25 then
+			-- Confirmation belongs to a newer snapshot than the rendered world.
+			-- Keep the tombstone until that world has passed the confirming frame.
+			if effect.confirmed and not ids[id]
+				and (not visible_ack or visible_ack >= effect.confirmed_ack) then
 				self.hits[id] = nil
 			end
 		end
 		for id, effect in pairs(self.pickups) do
 			effect.age = effect.age + dt
-			if effect.age > 1.25 then
-				self.pickups[id] = nil
-			end
 		end
 	end
 
@@ -214,10 +219,13 @@ function M.feedback()
 			end
 		end
 		for id, effect in pairs(self.hits) do
-			if effect.life ~= life or ack >= effect.seq and alive[id] then
+			if effect.confirmed then
+				-- A respawn cannot resurrect an enemy already killed by the host.
+			elseif effect.life ~= life or ack >= effect.seq and alive[id] then
 				self.hits[id] = nil
 			elseif ack >= effect.seq then
 				effect.confirmed = true
+				effect.confirmed_ack = ack
 			end
 		end
 		local attempted, remaining, active = self.pickups, {}, {}

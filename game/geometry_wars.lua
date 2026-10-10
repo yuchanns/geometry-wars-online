@@ -908,6 +908,8 @@ local grid = {}
 ---@type any[]
 local bullets = {}
 local predicted_bullets = {}
+local projectile_views = {}
+local enemy_views = {}
 local collision_history = netcode.history(1.25)
 local entity_id = 0
 ---@type any[]
@@ -2617,6 +2619,8 @@ local function clear_runtime_state()
 	state.life_id = 0
 	entity_id = 0
 	predicted_bullets = {}
+	projectile_views = {}
+	enemy_views = {}
 	state.player_alive = true
 	state.respawn_invincible = false
 	state.respawn_timer = 0.0
@@ -2804,6 +2808,27 @@ local function update_bullets(dt, pool, guest_only, view_time)
 	end
 end
 
+local function update_remote_bullet_views(dt)
+	local pool = multiplayer.host and bullets or multiplayer.world_view and multiplayer.world_view.bullets or {}
+	for i = 1, MAX_BULLETS do
+		local bullet = pool[i]
+		if bullet and bullet.active
+			and (multiplayer.host and bullet.input_seq or not multiplayer.host and not bullet.input_seq) then
+			local view = projectile_views[i]
+			if not view or view.id ~= bullet.id then
+				view = { id = bullet.id, x = bullet.x, y = bullet.y }
+				projectile_views[i] = view
+			end
+			-- Flight presentation keeps running while the next input is in transit.
+			-- Collision replay continues to use the shooter's authoritative steps.
+			view.x = view.x + bullet.vx * dt
+			view.y = view.y + bullet.vy * dt
+		else
+			projectile_views[i] = nil
+		end
+	end
+end
+
 local function world_scale()
 	local scale = math.min(window_w / W, window_h / H)
 	if scale <= 0 then
@@ -2892,7 +2917,9 @@ local function update_player(dt)
 		black_holes = powerup.black_holes
 	})
 
-	update_player_feedback(dt, player, is_moving)
+	if not multiplayer.remote_command then
+		update_player_feedback(dt, player, is_moving)
+	end
 end
 
 local function update_camera(dt)
@@ -2993,11 +3020,14 @@ local function draw_bullet_pool(pool, hide_guest)
 	for i = 1, MAX_BULLETS do
 		local bullet = pool[i]
 		if bullet and bullet.active and not (hide_guest and bullet.input_seq) then
+			local view = projectile_views[i]
+			local x = view and view.id == bullet.id and view.x or bullet.x
+			local y = view and view.id == bullet.id and view.y or bullet.y
 			local core = bullet.homing and BULLET_HOMING_CORE or BULLET_CORE
 			local glow = bullet.homing and BULLET_HOMING_GLOW or BULLET_GLOW
-			draw_masked_circle(core, 3, bullet.x, bullet.y)
-			draw_masked_circle(glow, 6, bullet.x, bullet.y)
-			draw_masked_circle(glow, 2, bullet.x - bullet.vx * 0.008, bullet.y - bullet.vy * 0.008)
+			draw_masked_circle(core, 3, x, y)
+			draw_masked_circle(glow, 6, x, y)
+			draw_masked_circle(glow, 2, x - bullet.vx * 0.008, y - bullet.vy * 0.008)
 		end
 	end
 end
@@ -3020,7 +3050,19 @@ local function draw_enemies()
 			local color = def.color
 			local glow = particle_alpha(color, 60)
 			if def.draw_rotated then
-				batch:layer(1, enemy.angle, enemy.x, enemy.y)
+				local angle = enemy.angle
+				if enemy.type == 2 then
+					local view = enemy_views[i]
+					if not view or view.id ~= enemy.id then
+						view = { id = enemy.id, angle = angle }
+						enemy_views[i] = view
+					end
+					if state.scene == "combat" then
+						view.angle = (view.angle - 4 * math.pi * state.frame_dt) % (2 * math.pi)
+					end
+					angle = view.angle
+				end
+				batch:layer(1, angle, enemy.x, enemy.y)
 				batch:add(masked[sprites[def.shape_sprite]][color])
 				batch:layer()
 			else
@@ -3538,6 +3580,7 @@ do
 			end
 			multiplayer.world_view = nil
 			predicted_bullets = {}
+			projectile_views = {}
 			partner.player = {
 				x = MAP_W * .5 + 55,
 				y = MAP_H * .5,
@@ -3721,8 +3764,8 @@ do
 				netcode.controls(command, input)
 				mouse_world_x, mouse_world_y = input.mx, input.my
 				multiplayer.effect_source = "guest-motion"
-				update_player(command.dt)
 				multiplayer.remote_command = command
+				update_player(command.dt)
 				powerup.try_collect()
 				multiplayer.effect_source = "guest-shot"
 				multiplayer.remote_command, multiplayer.shot = command, 0
@@ -3820,6 +3863,7 @@ do
 
 	function multiplayer.predict(dt)
 		multiplayer.world_view = world_buffer:advance(dt)
+		update_remote_bullet_views(dt)
 		if multiplayer.world_view and partner.health.player_alive then
 			local host = multiplayer.world_view.host
 			if partner.trail_life ~= host.id then
@@ -3828,7 +3872,8 @@ do
 				partner.health.trail_timer, partner.health.trail_count = 0, 0
 			end
 		end
-		multiplayer.local_feedback:advance(dt, multiplayer.world_view and multiplayer.world_view.enemies)
+		multiplayer.local_feedback:advance(dt, multiplayer.world_view and multiplayer.world_view.enemies,
+			multiplayer.world_view and multiplayer.world_view.ack)
 		do
 			local command = prediction:record(
 				{
@@ -3891,7 +3936,7 @@ do
 		if multiplayer.other_alive() then
 			with_partner(function()
 				local position = multiplayer.world_view and multiplayer.world_view.host or partner_view
-				if not multiplayer.host and position then
+				if position then
 					local moving = trail_x[1] and distance(position.x, position.y, trail_x[1], trail_y[1]) > .1
 					update_player_feedback(state.frame_dt, position, moving)
 				end
@@ -3930,6 +3975,7 @@ do
 		multiplayer.update_partner(dt)
 		update_enemies(dt)
 		update_bullets(dt, bullets, false)
+		update_remote_bullet_views(dt)
 		update_collisions()
 		multiplayer.collide_partner()
 		powerup.update_events(dt)
