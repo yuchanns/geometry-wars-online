@@ -14,7 +14,7 @@ interface Seat {
 }
 
 const RESERVED_MS = 30000
-const UPDATE_CLIENT = '请更新客户端版本'
+const UPDATE_CLIENT = 'Please update your client'
 
 function send(socket: WebSocket, kind: number, body: Value) {
   socket.send(packet(kind, body))

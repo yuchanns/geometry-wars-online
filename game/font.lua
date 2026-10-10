@@ -103,50 +103,6 @@ C0 C0 CC D8 F0 D8 CC 00
 76 DC 00 00 00 00 00 00
 ]]
 
--- Update prompt glyphs from WenQuanYi Micro Hei (Apache-2.0).
-local UPDATE_GLYPHS = {
-	-- 请
-	[35831] = {
-		0x2060, 0x17fe, 0x1860, 0x3fc, 0x60, 0x77fe, 0x1000, 0x13fc,
-		0x1204, 0x13fc, 0x1204, 0x1bfc, 0x1a04, 0x21c, 0x0, 0x0
-	},
-	-- 更
-	[26356] = {
-		0x7ffe, 0x180, 0x3ffc, 0x318c, 0x318c, 0x3ffc, 0x318c, 0x3ffc,
-		0x100, 0xd00, 0x700, 0x7c0, 0x787e, 0x4000, 0x0, 0x0
-	},
-	-- 新
-	[26032] = {
-		0x802, 0x7f7e, 0x7f40, 0x1240, 0x1240, 0x7f7e, 0x844, 0x844,
-		0x7f44, 0x2844, 0x2a44, 0x69c4, 0x4884, 0x3884, 0x0, 0x0
-	},
-	-- 客
-	[23458] = {
-		0x100, 0x7ffe, 0x7ffe, 0x4602, 0xff0, 0x1c30, 0x3760, 0x3e0,
-		0x7e3e, 0x6006, 0x1ff8, 0x1008, 0x1008, 0x1ff8, 0x1008, 0x0
-	},
-	-- 户
-	[25143] = {
-		0x180, 0x80, 0x80, 0x1ffc, 0x1004, 0x1004, 0x1004, 0x1ffc,
-		0x1000, 0x1000, 0x1000, 0x3000, 0x2000, 0x6000, 0x0, 0x0
-	},
-	-- 端
-	[31471] = {
-		0x3020, 0x1126, 0x1126, 0x7dfe, 0x0, 0x4c00, 0x2ffe, 0x2820,
-		0x29fe, 0x295a, 0x295a, 0x1d5a, 0x795a, 0x415e, 0x0, 0x0
-	},
-	-- 版
-	[29256] = {
-		0x240c, 0x24f8, 0x2480, 0x2480, 0x3e80, 0x20fc, 0x20e4, 0x20a4,
-		0x3dac, 0x25b8, 0x2518, 0x2518, 0x652c, 0x45c6, 0x0, 0x0
-	},
-	-- 本
-	[26412] = {
-		0x180, 0x180, 0x180, 0x7ffe, 0x3c0, 0x3c0, 0x5a0, 0xdb0,
-		0x1998, 0x318c, 0x6ff6, 0x4182, 0x180, 0x180, 0x0, 0x0
-	},
-}
-
 local function rgba_bytes(color)
 	local a = color >> 24 & 0xff
 	local r = color >> 16 & 0xff
@@ -173,16 +129,15 @@ end
 local GAMELIB_GLYPHS = parse_bitmap(GAMELIB_FONT8X8)
 
 local function build_bitmap_glyph(rows)
-	local dimension = #rows
 	local blank = true
 	local pixels = {}
-	for y = 1, dimension do
+	for y = 1, GLYPH_SIZE do
 		local bits = rows[y]
 		if bits ~= 0 then
 			blank = false
 		end
-		for x = 0, dimension - 1 do
-			if bits & (1 << (dimension - 1) >> x) ~= 0 then
+		for x = 0, GLYPH_SIZE - 1 do
+			if bits & (0x80 >> x) ~= 0 then
 				pixels[#pixels + 1] = rgba_bytes(COLOR_WHITE)
 			else
 				pixels[#pixels + 1] = "\0\0\0\0"
@@ -192,16 +147,12 @@ local function build_bitmap_glyph(rows)
 	if blank then
 		return rgba_bytes(COLOR_WHITE), 1, 1
 	end
-	return table.concat(pixels), dimension, dimension
+	return table.concat(pixels), GLYPH_SIZE, GLYPH_SIZE
 end
 
 function font.register_bitmap_glyphs(add_sprite)
 	for index, rows in ipairs(GAMELIB_GLYPHS) do
 		local codepoint = ASCII_FIRST + index - 1
-		local content, width, height = build_bitmap_glyph(rows)
-		add_sprite("font_glyph_" .. codepoint, content, width, height, 0, 0)
-	end
-	for codepoint, rows in pairs(UPDATE_GLYPHS) do
 		local content, width, height = build_bitmap_glyph(rows)
 		add_sprite("font_glyph_" .. codepoint, content, width, height, 0, 0)
 	end
@@ -212,18 +163,14 @@ function font.attach_bitmap_glyphs(sprites)
 	for codepoint = ASCII_FIRST, ASCII_LAST do
 		sprites.font_glyphs[codepoint] = sprites["font_glyph_" .. codepoint]
 	end
-	for codepoint in pairs(UPDATE_GLYPHS) do
-		sprites.font_glyphs[codepoint] = sprites["font_glyph_" .. codepoint]
-	end
 end
 
 local function line_width(text, size)
 	local width = 0
-	for _, codepoint in utf8.codes(text) do
+	for i = 1, #text do
+		local codepoint = text:byte(i)
 		if codepoint >= ASCII_FIRST and codepoint <= ASCII_LAST then
 			width = width + size
-		elseif UPDATE_GLYPHS[codepoint] then
-			width = width + size * 2
 		end
 	end
 	return width
@@ -291,7 +238,8 @@ local function draw_line(batch, masked, glyphs, text, size, color, x, y)
 		batch:layer(scale, x, y)
 	end
 	local dx = 0
-	for _, codepoint in utf8.codes(text) do
+	for i = 1, #text do
+		local codepoint = text:byte(i)
 		local glyph = glyphs[codepoint]
 		if codepoint == SPACE_CODEPOINT then
 			dx = dx + GLYPH_SIZE
@@ -301,7 +249,7 @@ local function draw_line(batch, masked, glyphs, text, size, color, x, y)
 			else
 				batch:add(masked[glyph][color], x + dx, y)
 			end
-			dx = dx + (UPDATE_GLYPHS[codepoint] and 16 or GLYPH_SIZE)
+			dx = dx + GLYPH_SIZE
 		end
 	end
 	if scaled then

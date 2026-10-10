@@ -20,7 +20,3 @@
   their licenses are retained in the installed dependencies.
 
 The root `LICENSE` retains the example project's Apache-2.0 license.
-
-- The eight Chinese update-prompt bitmap glyphs in `game/font.lua` are rendered
-  from [WenQuanYi Micro Hei](https://wenq.org/wqy2/index.cgi?MicroHei),
-  under Apache-2.0.
