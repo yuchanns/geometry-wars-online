@@ -28,16 +28,18 @@ local function connect(url)
 	if socket then
 		socket:close()
 	end
-	socket = websocket.connect(url or endpoint, string.char(2, 3))
+	-- The native/WASM receive queue must preserve input batches too.
+	socket = websocket.connect(url or endpoint, string.char(3))
 	incoming, outgoing = {}, {}
 	failure = nil
 	retry_at = ltask.now() + RECONNECT_DELAY
 end
 
--- Retain the latest gameplay packet while preserving room command order.
+-- Snapshot deltas use acknowledged baselines, so intermediate snapshots can be
+-- discarded. Input batches contain new commands and must all reach the host.
 local function enqueue(data)
 	local kind = data:byte(1)
-	if kind == 2 or kind == 3 then
+	if kind == 3 then
 		for i, pending in ipairs(incoming) do
 			if pending:byte(1) == kind then
 				table.remove(incoming, i)
