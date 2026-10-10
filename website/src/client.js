@@ -1,3 +1,6 @@
+import { zipSync } from 'fflate'
+import audioFiles from './audio-manifest.json'
+
 const status = document.querySelector('#status')
 const canvas = document.querySelector('#canvas')
 canvas.addEventListener('pointerdown', () => canvas.focus())
@@ -11,6 +14,30 @@ function log(message) {
   if (window.geometryWarsLog.length > 80)
     window.geometryWarsLog.shift()
 }
+
+async function loadAudio(module) {
+  try {
+    const entries = {}
+    let next = 0
+    async function download() {
+      while (next < audioFiles.length) {
+        const [name, url] = audioFiles[next++]
+        const response = await fetch(url)
+        if (!response.ok)
+          throw new Error(`Could not load ${name}`)
+        entries[name] = new Uint8Array(await response.arrayBuffer())
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, audioFiles.length) }, download))
+    // The audio VFS reopens this registered archive when a sound first plays.
+    module.FS.writeFile('/sound.zip', zipSync(entries, { level: 0 }))
+    module.FS.writeFile('/sound.ready', new Uint8Array())
+  }
+  catch (error) {
+    console.warn('Audio is unavailable; the game can continue.', error)
+  }
+}
+
 async function startGame() {
   try {
     if (!crossOriginIsolated)
@@ -46,6 +73,7 @@ async function startGame() {
       throw new Error('Could not load websocket.wasm')
     const files = [
       ['/main.zip', archive],
+      ['/sound.zip', zipSync({ 'audio.pending': new Uint8Array() }, { level: 0 })],
       ['/runtime/websocket.wasm', new Uint8Array(await socketResponse.arrayBuffer())],
     ]
     status.textContent = 'Starting game…'
@@ -55,7 +83,7 @@ async function startGame() {
       throw new Error('Expected a ws:// or wss:// server URL.')
     window.geometryWarsApp = await createApp({
       canvas,
-      arguments: ['zipfile=/main.zip', 'cpath=/runtime/?.wasm', `server=${endpoint}`],
+      arguments: ['zipfile=/main.zip;/sound.zip', 'deferred_audio=1', 'cpath=/runtime/?.wasm', `server=${endpoint}`],
       locateFile: path => new URL(`./runtime/${path}`, location.href).href,
       print: log,
       printErr: (message) => {
@@ -75,6 +103,7 @@ async function startGame() {
     })
     status.hidden = true
     canvas.focus()
+    void loadAudio(window.geometryWarsApp)
   }
   catch (error) {
     status.textContent = error.message

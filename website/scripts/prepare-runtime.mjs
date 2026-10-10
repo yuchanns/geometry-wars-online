@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
@@ -7,6 +8,7 @@ import { zipSync } from 'fflate'
 const websiteDir = fileURLToPath(new URL('..', import.meta.url))
 const repoRoot = path.resolve(websiteDir, '..')
 const runtimeDir = path.join(websiteDir, 'public/runtime')
+const audioDir = path.join(websiteDir, 'public/audio')
 const buildDir = path.join(repoRoot, 'bin/web')
 
 async function collectFiles(directory) {
@@ -30,9 +32,24 @@ for (const name of ['soluna.js', 'soluna.wasm', 'websocket.wasm'])
 
 const gameDir = path.join(repoRoot, 'game')
 const entries = {}
+const audioFiles = []
+await rm(audioDir, { recursive: true, force: true })
+await mkdir(audioDir, { recursive: true })
 for (const filename of await collectFiles(gameDir)) {
   const name = path.relative(gameDir, filename).split(path.sep).join('/')
-  entries[name] = await readFile(filename)
+  const data = await readFile(filename)
+  if (path.extname(name) === '.wav') {
+    const hash = createHash('sha256').update(data).digest('hex').slice(0, 12)
+    const audioName = name.replace(/^asset\//, '').replace(/\.wav$/, `.${hash}.wav`)
+    const destination = path.join(audioDir, audioName)
+    await mkdir(path.dirname(destination), { recursive: true })
+    await writeFile(destination, data)
+    audioFiles.push([name, `/audio/${audioName}`])
+  }
+  else {
+    entries[name] = data
+  }
 }
 await writeFile(path.join(websiteDir, 'public/main.zip'), zipSync(entries, { level: 9 }))
-process.stdout.write(`Prepared Soluna runtime and ${Object.keys(entries).length} game files.\n`)
+await writeFile(path.join(websiteDir, 'src/audio-manifest.json'), `${JSON.stringify(audioFiles, null, 2)}\n`)
+process.stdout.write(`Prepared Soluna runtime, ${Object.keys(entries).length} game files and ${audioFiles.length} individual audio files.\n`)

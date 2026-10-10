@@ -847,6 +847,7 @@ local state = {
 	leaderboard = {},
 }
 local audio = {
+	pending = soluna.platform == "wasm" and soluna.settings().deferred_audio,
 	music_voice = nil,
 	death_sound_played = false,
 	shoot = { "shoot_01", "shoot_02", "shoot_03", "shoot_04" },
@@ -1133,6 +1134,13 @@ local function enemy_color(enemy_type)
 	return def and def.color or COLOR_WHITE
 end
 
+function audio.ready()
+	if audio.pending and (require "soluna.file").local_exist "/sound.ready" then
+		audio.pending = false
+	end
+	return not audio.pending
+end
+
 local function stop_music(fade_seconds)
 	local voice = audio.music_voice
 	audio.music_voice = nil
@@ -1143,6 +1151,9 @@ local function stop_music(fade_seconds)
 end
 
 local function ensure_music_playing()
+	if not audio.ready() then
+		return
+	end
 	local voice = audio.music_voice
 	if voice ~= nil and voice:playing() then
 		return
@@ -1157,6 +1168,9 @@ end
 local function play_effect(name, opts)
 	if multiplayer and not multiplayer.local_effects then
 		multiplayer.record("sound", { name, opts or {} })
+	end
+	if not audio.ready() then
+		return
 	end
 	local voice, err = soluna.play_sound(name, opts)
 	if voice == nil then
@@ -3959,6 +3973,9 @@ end
 
 do
 	local function update_combat_scene(dt)
+		if audio.music_voice == nil then
+			ensure_music_playing()
+		end
 		update_star_layer(stars_far, dt)
 		update_star_layer(stars_near, dt)
 		update_mouse_world()
