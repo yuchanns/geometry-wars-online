@@ -44,7 +44,7 @@ for (const filename of await collectFiles(gameDir)) {
     const destination = path.join(audioDir, audioName)
     await mkdir(path.dirname(destination), { recursive: true })
     await writeFile(destination, data)
-    audioFiles.push([name, `/audio/${audioName}`])
+    audioFiles.push([name, `/audio/${audioName}`, data.length])
   }
   else {
     entries[name] = data
