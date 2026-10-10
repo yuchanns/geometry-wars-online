@@ -3517,13 +3517,15 @@ do
 			state[k] = old_health[k]
 		end
 	end
-	local function merge(dst, src)
+	local function merge(dst, src, skip)
 		for k, v in pairs(src) do
-			if type(v) == "table" then
-				dst[k] = dst[k] or {}
-				merge(dst[k], v)
-			else
-				dst[k] = v
+			if k ~= skip then
+				if type(v) == "table" then
+					dst[k] = dst[k] or {}
+					merge(dst[k], v)
+				else
+					dst[k] = v
+				end
 			end
 		end
 	end
@@ -3687,7 +3689,6 @@ do
 			end
 			multiplayer.local_feedback:reconcile(data.input_ack, data.guest.health.life_id,
 				data.enemies, data.powerup.entries)
-			if data.state.scene ~= state.scene then state.scene_time = 0 end
 			if data.state.combo > state.combo then state.combo_bump_timer = .3 end
 			local ability = data.powerup
 			ability.energy_timer = ability.energy_started > 0
@@ -3716,7 +3717,8 @@ do
 			data.host_health.respawn_timer = data.host_health.respawn_started > 0 and math.max(0,
 				RESPAWN_INVINCIBLE - (data.simulation_time - data.host_health.respawn_started)) or 0
 			data.host_health.respawn_invincible = data.host_health.respawn_timer > 0
-			merge(state, data.state)
+			-- The local flow owns scene transitions, timers and audio cleanup.
+			merge(state, data.state, "scene")
 			merge(powerup, data.powerup)
 			multiplayer.restore_pickup_feedback()
 			merge(state, data.guest.health)
@@ -4184,6 +4186,7 @@ do
 	local function reset()
 		ensure_runtime_pools()
 		clear_runtime_state()
+		state.round = multiplayer.round
 		multiplayer.reset_partner()
 		init_starfield()
 		init_grid()
@@ -4239,6 +4242,8 @@ do
 		while true do
 			if not multiplayer.started then
 				return "online"
+			elseif state.round ~= multiplayer.round then
+				return "reset"
 			end
 			handle_combat_debug_keys()
 			update_combat_scene(state.frame_dt)
@@ -4254,6 +4259,8 @@ do
 		while true do
 			if not multiplayer.started then
 				return "online"
+			elseif state.round ~= multiplayer.round then
+				return "reset"
 			end
 			update_death_scene(state.frame_dt)
 			if state.scene_time > 1.5 then
@@ -4274,13 +4281,17 @@ do
 
 	function game.over()
 		state.set_scene_hooks(draw_game_over_world, draw_game_over_overlay)
+		local finishing = false
 		while true do
 			if not multiplayer.started then
 				return "online"
+			elseif state.round ~= multiplayer.round then
+				return "reset"
 			end
-			if state.scene_time > 2.0 and confirm_requested() then
+			if not finishing and state.scene_time > 2.0 and confirm_requested() then
 				multiplayer.finish()
-				return "online"
+				-- Stay here until the server ends the round; started is still true.
+				finishing = true
 			end
 			update_game_over_scene(state.frame_dt)
 			flow.sleep(0)

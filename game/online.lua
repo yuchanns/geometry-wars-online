@@ -7,6 +7,8 @@ function M.new(ctx)
 	local net = {
 		host = false,
 		started = false,
+		-- A finish and restart can arrive together with started still true.
+		round = 0,
 		room = nil,
 		rooms = {},
 		selected = 1,
@@ -102,6 +104,7 @@ function M.new(ctx)
 		elseif kind == 34 then
 			net.host = body.host
 			net.started = true
+			net.round = net.round + 1
 			net.error = ""
 			snapshot_sequence = 0
 			last_snapshot = 0

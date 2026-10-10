@@ -18,3 +18,10 @@ test('World spawning continues after host death while the guest is alive', () =>
     cwd: projectRoot,
   })
 })
+
+test('Delayed round restarts reset scenes and preserve guest audio cleanup', () => {
+  execFileSync(`${projectRoot}/3rd/soluna/bin/luamake-bin/bin/linux/luamake`, ['lua', 'test/round.test.lua'], {
+    stdio: 'inherit',
+    cwd: projectRoot,
+  })
+})
