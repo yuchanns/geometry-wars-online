@@ -30,4 +30,4 @@ Open the game on a desktop with a keyboard and mouse. Your browser needs WebGPU 
 
 Want to run or build it locally? See the [development guide](docs/DEVELOPMENT.md).
 
-Built with [Soluna](https://github.com/cloudwu/soluna). [Source and license credits](THIRD_PARTY.md).
+Built with [Soluna](https://github.com/cloudwu/soluna). [Source and license credits](docs/THIRD_PARTY.md).
