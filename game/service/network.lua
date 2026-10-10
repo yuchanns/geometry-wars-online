@@ -5,7 +5,7 @@ local codec = require "net_codec"
 global ipairs, pcall, string, table, tostring
 
 local MAX_QUEUE <const> = 64
-local RECONNECT_DELAY <const> = 200 -- ltask time is in centiseconds.
+local RECONNECT_DELAY <const> = 2 -- ltask.now() first returns seconds.
 local S = {}
 local owner, endpoint, socket
 local incoming, outgoing = {}, {}
@@ -138,7 +138,7 @@ function S.send(kind, body, frame)
 	end
 	local ok, data = pcall(codec.encode, body)
 	if not ok then
-		disconnect(tostring(data))
+		ltask.send(owner, "_network_send_failed", kind, tostring(data))
 		return
 	end
 	if #outgoing >= MAX_QUEUE then

@@ -21,12 +21,20 @@ local function copy(value)
 	return result
 end
 
-local function difference(value, base)
+local function difference(value, base, depth)
+	depth = depth or 0
 	local patch = { set = {}, remove = {}, edit = {} }
 	for key, item in pairs(value) do
 		local old = base[key]
 		if type(item) == "table" and type(old) == "table" then
-			patch.edit[key] = difference(item, old)
+			local edit = difference(item, old, depth + 1)
+			if edit and depth >= 2 then
+				-- Deep edits multiply wire nesting. Replace the changed subtree
+				-- instead, keeping particle parameters within the codec limit.
+				patch.set[key] = copy(item)
+			else
+				patch.edit[key] = edit
+			end
 		elseif item ~= old then
 			patch.set[key] = copy(item)
 		end
@@ -195,13 +203,19 @@ function M.reader()
 	return self
 end
 
-function M.input(commands, acknowledged)
+function M.input(commands, acknowledged, event_ack)
 	local parts = { string.pack("<I2", #commands) }
 	for _, command in ipairs(commands) do
 		parts[#parts + 1] = string.pack(INPUT_FORMAT, command.seq, command.life,
 			command.dt, command.buttons, coordinate(command.mx), coordinate(command.my), command.view_time or -1)
 	end
-	return { version = 1, snapshot_ack = acknowledged, commands = table.concat(parts) }
+	return {
+		version = 1,
+		effects = 1,
+		event_ack = event_ack or 0,
+		snapshot_ack = acknowledged,
+		commands = table.concat(parts)
+	}
 end
 
 function M.commands(packet)

@@ -160,6 +160,18 @@ do
 	assert(#writer.order == 64 and #reader.order == 64)
 	assert(writer:encode(snapshot(101), 1).base == 0, "An evicted baseline did not recover")
 	assert(protocol.reader():decode(first) == first, "Legacy snapshots no longer work")
+	-- Ordinary thrust changes must remain encodable for cached clients too.
+	local effects = require "particle_effects"
+	local particle_writer, particle_reader = protocol.writer(), protocol.reader()
+	for sequence = 1, 20 do
+		local frame = snapshot(sequence)
+		frame.events = { { "emit", effects.emitter {
+			kind = "thrust", x = sequence, y = 100, angle = 0,
+			style = sequence % 2 == 1 and "energy" or "normal"
+		}, "guest-motion" } }
+		local received = particle_reader:decode(clone(particle_writer:encode(frame, sequence - 1)))
+		assert(received.events[1][2].x == sequence, "Thrust delta failed to round-trip")
+	end
 	local client, host = netcode.client(), netcode.host()
 	for frame = 1, 60 do
 		local command = client:record({ right = true, mx = 700.13, my = 400.14 }, 1 / 60, 0, frame / 60)
@@ -185,6 +197,36 @@ do
 	print(string.format(
 		"PASS: acknowledged deltas, missing-baseline recovery, compact pools, ordered inputs (%d vs %d bytes)",
 		compact, old))
+end
+
+do
+	local feedback = netcode.feedback()
+	local enemy = { id = 7, active = true, hp = 1 }
+	local entry = { id = 8, active = true, type = 1, ability = 0 }
+	local command = { seq = 10, life = 1 }
+	feedback:hit(enemy, command)
+	assert(feedback:collect(entry, command) and not feedback:collect(entry, command))
+	feedback:reconcile(9, 1, { enemy }, { entry })
+	assert(feedback.hits[7] and feedback:ability(), "An older acknowledgement undid local feedback")
+	feedback:reconcile(10, 1, { enemy }, { entry })
+	assert(not feedback.hits[7] and not feedback:ability(), "Rejected hits or pickups were not restored")
+	assert(enemy.hp == 1 and entry.active, "Prediction changed authoritative game rules")
+	command.seq = 11
+	feedback:hit(enemy, command)
+	feedback:reconcile(11, 1, {}, {})
+	assert(feedback.hits[7], "A confirmed death reappeared in the delayed world")
+	feedback:advance(.02, {})
+	assert(not feedback.hits[7])
+	entry.id = 9
+	feedback:collect(entry, command)
+	feedback:reconcile(10, 2, {}, { entry })
+	assert(not feedback:ability(), "An old life retained a provisional ability")
+	enemy.hp, command.life = 5, 2
+	feedback:hit(enemy, command, true)
+	assert(feedback.hits[7] and enemy.hp == 5, "Nuke presentation changed authoritative health")
+	feedback:reconcile(11, 2, { enemy }, { entry })
+	assert(not feedback.hits[7], "A rejected nuke death was not restored")
+	print "PASS: reversible local hit and pickup presentation"
 end
 
 -- Real input batches and acknowledgements, with delay, jitter, coalescing,
@@ -576,8 +618,9 @@ do
 		apply = function(snapshot)
 			applied = snapshot
 		end,
-		snapshot = function()
+		snapshot = function(_, effects)
 			return {
+				effect_version = effects and 1 or nil,
 				state = {},
 				host_player = {},
 				host_health = {},
@@ -611,6 +654,14 @@ do
 	deliver(host, 2, protocol.input({}, 0))
 	local compact = publish(host, 4)
 	assert(compact.version == 1 and protocol.reader():decode(compact).sequence == 3)
+	host.record("fx", { kind = "thrust", x = 100, y = 200, style = "normal" })
+	local effect_first = publish(host, 4.1)
+	local effect_repeat = publish(host, 4.2)
+	local effect_reader = protocol.reader()
+	local event_id = effect_reader:decode(effect_first).events[1][4]
+	assert(#effect_reader:decode(effect_repeat).events == 1, "An unacknowledged effect was discarded")
+	deliver(host, 2, protocol.input({}, effect_first.sequence, event_id))
+	assert(#effect_reader:decode(publish(host, 4.3)).events == 0, "Acknowledged effects kept replaying")
 	local guest = online.new(ctx)
 	deliver(guest, 34, { host = false })
 	first.protocol_version = nil -- The cached old host has no capability advertisement.
@@ -619,6 +670,11 @@ do
 	first.sequence, first.protocol_version = 2, 1
 	deliver(guest, 3, first)
 	assert(publish(guest, 3).version == 1, "Mutually supported compact inputs were not enabled")
+	deliver(guest, 3, effect_first)
+	assert(#applied.events == 1)
+	deliver(guest, 3, effect_repeat)
+	assert(#applied.events == 0 and publish(guest, 4).event_ack == event_id,
+		"Repeated snapshot effects were presented more than once")
 	package.loaded.ltask, package.loaded.online = old_ltask, nil
 	print "PASS: new/legacy host and guest protocol negotiation"
 end

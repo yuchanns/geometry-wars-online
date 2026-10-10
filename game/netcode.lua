@@ -147,6 +147,101 @@ function M.host()
 	return self
 end
 
+-- Local hit/pickup presentation is provisional until the host processes its input.
+function M.feedback()
+	local self = { hits = {}, pickups = {}, seen = {}, order = 0 }
+	function self:hit(enemy, command, lethal)
+		if (lethal or enemy.hp <= 1) and not self.hits[enemy.id] then
+			self.hits[enemy.id] = { seq = command.seq, life = command.life, age = 0 }
+		end
+	end
+
+	function self:collect(entry, command)
+		if not entry.id or self.seen[entry.id] then
+			return
+		end
+		self.order = self.order + 1
+		local effect = {
+			seq = command.seq,
+			life = command.life,
+			age = 0,
+			order = self.order,
+			type = entry.type,
+			ability = entry.ability
+		}
+		self.pickups[entry.id], self.seen[entry.id] = effect, true
+		return effect
+	end
+
+	function self:ability()
+		local latest
+		for _, effect in pairs(self.pickups) do
+			if effect.type == 1 and (not latest or effect.order > latest.order) then
+				latest = effect
+			end
+		end
+		return latest
+	end
+
+	function self:advance(dt, visible)
+		local ids = {}
+		for _, enemy in pairs(visible or {}) do
+			if enemy.active then
+				ids[enemy.id] = true
+			end
+		end
+		for id, effect in pairs(self.hits) do
+			effect.age = effect.age + dt
+			if effect.confirmed and not ids[id] or effect.age > 1.25 then
+				self.hits[id] = nil
+			end
+		end
+		for id, effect in pairs(self.pickups) do
+			effect.age = effect.age + dt
+			if effect.age > 1.25 then
+				self.pickups[id] = nil
+			end
+		end
+	end
+
+	function self:reconcile(ack, life, enemies, entries)
+		local alive = {}
+		for _, enemy in pairs(enemies) do
+			if enemy.active then
+				alive[enemy.id] = true
+			end
+		end
+		for id, effect in pairs(self.hits) do
+			if effect.life ~= life or ack >= effect.seq and alive[id] then
+				self.hits[id] = nil
+			elseif ack >= effect.seq then
+				effect.confirmed = true
+			end
+		end
+		local attempted, remaining, active = self.pickups, {}, {}
+		for _, entry in pairs(entries) do
+			if entry.active and entry.id then
+				active[entry.id] = true
+			end
+		end
+		for id, effect in pairs(attempted) do
+			if effect.life ~= life then self.seen[id] = nil end
+			if effect.life == life and effect.seq > ack then
+				remaining[id] = effect
+			end
+		end
+		for id in pairs(self.seen) do
+			if not active[id] then
+				self.seen[id] = nil
+			end
+		end
+		self.pickups = remaining
+		return attempted
+	end
+
+	return self
+end
+
 -- Guest projectiles advance against the world timeline the shooter saw. The
 -- host keeps collision history; clients never choose damage or an enemy ID.
 function M.history(duration)
