@@ -60,7 +60,6 @@ local function setup(host)
 	flow.load(game)
 	local function packets(messages)
 		delivery("open", "", messages)
-		net.poll()
 	end
 	packets { { 34, { host = host == true } } }
 	state.round = net.round
