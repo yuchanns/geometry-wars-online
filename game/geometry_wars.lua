@@ -767,7 +767,8 @@ local mouse_screen_x = window_w * 0.5
 local mouse_screen_y = window_h * 0.5
 local mouse_world_x = MAP_W * 0.5
 local mouse_world_y = MAP_H * 0.5
-local last_tick
+local last_frame
+local render_dt = 1.0 / 60.0
 local fps = 0.0
 local fps_clock
 local fps_frames = 0
@@ -3076,7 +3077,7 @@ local function draw_enemies()
 						enemy_views[i] = view
 					end
 					if state.scene == "combat" then
-						view.angle = (view.angle - 4 * math.pi * state.frame_dt) % (2 * math.pi)
+						view.angle = (view.angle - 4 * math.pi * render_dt) % (2 * math.pi)
 					end
 					angle = view.angle
 				end
@@ -3958,7 +3959,7 @@ do
 				local position = multiplayer.world_view and multiplayer.world_view.host or partner_view
 				if position then
 					local moving = trail_x[1] and distance(position.x, position.y, trail_x[1], trail_y[1]) > .1
-					update_player_feedback(state.frame_dt, position, moving)
+					update_player_feedback(render_dt, position, moving)
 				end
 				draw_at(position)
 			end)
@@ -4315,18 +4316,46 @@ end
 
 local callback = {}
 
+-- Browser rendering can pause while the service timer keeps advancing the game.
+ltask.fork(function()
+	local interval = 1.0 / 60.0
+	local previous = ltask.counter()
+	local elapsed = 0.0
+	while true do
+		ltask.sleep(1)
+		local now = ltask.counter()
+		elapsed = clamp(elapsed + now - previous, 0, 0.05)
+		previous = now
+		if init then
+			elapsed = 0.0
+		else
+			while elapsed >= interval do
+				elapsed = elapsed - interval
+				multiplayer.time = now
+				state.total_time = state.total_time + interval
+				state.scene_time = state.scene_time + interval
+				state.frame_dt = interval
+				local current_scene = flow.update()
+				if current_scene ~= nil then
+					state.sync_scene(current_scene)
+				end
+				multiplayer.publish(now)
+				input.clear_key_presses()
+			end
+		end
+	end
+end)
+
 function callback.frame()
 	if init then
 		init()
 	end
 
 	local now = ltask.counter()
-	multiplayer.time = now
-	local dt = 1.0 / 60.0
-	if last_tick ~= nil then
-		dt = clamp(now - last_tick, 0, 0.05)
+	if last_frame ~= nil then
+		render_dt = clamp(now - last_frame, 0, 0.05)
 	end
-	last_tick = now
+	last_frame = now
 	if fps_clock == nil then
 		fps_clock = now
 	end
@@ -4337,15 +4366,7 @@ function callback.frame()
 		fps_frames = 0
 		fps_clock = now
 	end
-	state.total_time = state.total_time + dt
-	state.scene_time = state.scene_time + dt
-	state.frame_dt = dt
-	local current_scene = flow.update()
-	if current_scene ~= nil then
-		state.sync_scene(current_scene)
-	end
-	multiplayer.publish(now)
-	sync_particle_service_frame(dt)
+	sync_particle_service_frame(render_dt)
 
 	view.begin(batch)
 	batch:add(quad {
@@ -4368,7 +4389,6 @@ function callback.frame()
 	view.finish(batch)
 	input.mouse_pressed = false
 	input.mouse_released = false
-	input.clear_key_presses()
 end
 
 function callback.mouse_move(x, y)
