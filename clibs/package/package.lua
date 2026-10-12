@@ -1,5 +1,5 @@
 local fs = require "bee.filesystem"
-local bindir, destination, host = ...
+local bindir, destination, host, engine = ...
 bindir, destination = fs.path(bindir), fs.path(destination)
 
 local function copy(source, target)
@@ -20,7 +20,7 @@ end
 fs.remove_all(destination)
 fs.create_directories(destination)
 local exe = host == "windows" and "soluna.exe" or "soluna"
-copy(bindir / exe, destination / exe)
+copy(fs.path(engine), destination / exe)
 local module = host == "windows" and "websocket.dll" or "websocket.so"
 copy(bindir / module, destination / module)
 copy_game(fs.path "game")

@@ -31,20 +31,21 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: website/pnpm-lock.yaml
-      - uses: emscripten-core/setup-emsdk@v16
-        with:
-          version: 4.0.16
-          actions-cache-folder: emsdk-cache
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check
-      - name: Build browser client
-        working-directory: .
-        run: |
-          chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
-          ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
+      - name: Build Soluna runtime
+        uses: ./3rd/soluna/.github/actions/soluna
+        id: soluna
+        with:
+          soluna_path: 3rd/soluna
+      - name: Build WebSocket extension
+        uses: ./.github/actions/websocket
       - name: Build website
         run: pnpm run build
+        env:
+          SOLUNA_JS_PATH: ${{ steps.soluna.outputs.SOLUNA_JS_PATH }}
+          SOLUNA_WASM_PATH: ${{ steps.soluna.outputs.SOLUNA_WASM_PATH }}
       - name: Test local Worker rooms
         shell: bash
         run: |

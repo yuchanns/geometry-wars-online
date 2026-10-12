@@ -2,11 +2,11 @@
 #include <lauxlib.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 #ifdef __EMSCRIPTEN__
-#include <emscripten/websocket.h>
-#include <pthread.h>
+#include <emscripten.h>
+#include <stdatomic.h>
+#include <stdint.h>
 #else
 #include <curl/curl.h>
 #endif
@@ -19,7 +19,9 @@
 enum {
 	CONNECTING,
 	OPEN,
-	CLOSED
+	CLOSED,
+	SOCKET_MESSAGE,
+	SOCKET_ERROR
 };
 typedef struct {
 	char *data;
@@ -32,8 +34,7 @@ typedef struct {
 	unsigned count;
 	unsigned char coalesce[256];
 #ifdef __EMSCRIPTEN__
-	EMSCRIPTEN_WEBSOCKET_T socket;
-	pthread_mutex_t mutex;
+	atomic_flag mutex;
 #else
 	CURL *easy;
 	CURLM *multi;
@@ -45,8 +46,14 @@ typedef struct {
 } client;
 
 #ifdef __EMSCRIPTEN__
-#define LOCK(c) pthread_mutex_lock(&(c)->mutex)
-#define UNLOCK(c) pthread_mutex_unlock(&(c)->mutex)
+static void
+lock(client *c) {
+	while (atomic_flag_test_and_set_explicit(&c->mutex, memory_order_acquire)) {
+		/* Queue operations never dispatch to the browser thread. */
+	}
+}
+#define LOCK(c) lock(c)
+#define UNLOCK(c) atomic_flag_clear_explicit(&(c)->mutex, memory_order_release)
 #else
 #define LOCK(c) ((void)(c))
 #define UNLOCK(c) ((void)(c))
@@ -55,7 +62,11 @@ typedef struct {
 static void
 fail(client *c, const char *reason) {
 	c->state = CLOSED;
-	snprintf(c->error, sizeof(c->error), "%s", reason);
+	size_t size = strlen(reason);
+	if (size >= sizeof(c->error))
+		size = sizeof(c->error) - 1;
+	memcpy(c->error, reason, size);
+	c->error[size] = 0;
 }
 
 /* Called with the mutex held on WASM. Overflow closes the connection rather
@@ -95,50 +106,92 @@ enqueue(client *c, const void *data, size_t size) {
 }
 
 #ifdef __EMSCRIPTEN__
-static bool
-on_open(int type, const EmscriptenWebSocketOpenEvent *event, void *ud) {
-	(void)type;
-	(void)event;
-	client *c = ud;
+/* EM_JS/EM_ASM travel with the extension. The official runtime already has
+ * this dispatcher; no WebSocket library or extra engine exports are needed. */
+EM_JS(int, socket_on_main, (const char *code, int operation, client *context, const void *data, size_t size, uintptr_t callback), {
+	if (ENVIRONMENT_IS_PTHREAD)
+		return proxyToMainThread(0, code, true, operation, context, data, size, callback);
+	return ASM_CONSTS[code](operation, context, data, size, callback);
+});
+#define SOCKET_CODE(...) CODE_EXPR(#__VA_ARGS__)
+enum { SOCKET_CONNECT, SOCKET_SEND, SOCKET_CLOSE };
+
+static void
+socket_event(client *c, int event, const void *data, size_t size) {
 	LOCK(c);
-	if (c->state == CONNECTING)
-		c->state = OPEN;
+	switch (event) {
+	case OPEN:
+		if (c->state == CONNECTING)
+			c->state = OPEN;
+		break;
+	case CLOSED:
+		if (!c->error[0])
+			fail(c, "Browser WebSocket connection closed");
+		break;
+	case SOCKET_MESSAGE:
+		if (c->state == OPEN)
+			enqueue(c, data, size);
+		break;
+	case SOCKET_ERROR:
+		fail(c, "Browser WebSocket connection failed");
+		break;
+	}
 	UNLOCK(c);
-	return true;
 }
 
-static bool
-on_message(int type, const EmscriptenWebSocketMessageEvent *event, void *ud) {
-	(void)type;
-	client *c = ud;
-	LOCK(c);
-	if (c->state == OPEN)
-		enqueue(c, event->data, event->numBytes - (event->isText ? 1 : 0));
-	UNLOCK(c);
-	return true;
-}
-
-static bool
-on_error(int type, const EmscriptenWebSocketErrorEvent *event, void *ud) {
-	(void)type;
-	(void)event;
-	client *c = ud;
-	LOCK(c);
-	fail(c, "Browser WebSocket connection failed");
-	UNLOCK(c);
-	return true;
-}
-
-static bool
-on_close(int type, const EmscriptenWebSocketCloseEvent *event, void *ud) {
-	(void)type;
-	client *c = ud;
-	LOCK(c);
-	c->state = CLOSED;
-	if (!c->error[0])
-		snprintf(c->error, sizeof(c->error), "Connection closed (%u)", event->code);
-	UNLOCK(c);
-	return true;
+static int
+socket_call(client *c, int operation, const void *data, size_t size) {
+	return socket_on_main(SOCKET_CODE({
+		const context = $1;
+		const sockets = Module['geometryWarsSockets'] ||= new Map();
+		try {
+			if ($0 === 0) {
+				const callback = getWasmTableEntry($4);
+				const notify = (event, data = 0, size = 0) => callback(context, event, data, size);
+				const socket = new WebSocket(UTF8ToString($2));
+				socket.binaryType = 'arraybuffer';
+				socket.onopen = () => notify(1);
+				socket.onclose = () => notify(2);
+				socket.onerror = () => notify(4);
+				socket.onmessage = (event) => {
+					const bytes = typeof event.data === 'string'
+						? new TextEncoder().encode(event.data) : new Uint8Array(event.data);
+					if (bytes.length > $3) {
+						notify(3, 0, bytes.length);
+						return;
+					}
+					const pointer = _malloc(bytes.length || 1);
+					if (!pointer) {
+						notify(4);
+						return;
+					}
+					try {
+						HEAPU8.set(bytes, pointer);
+						notify(3, pointer, bytes.length);
+					} finally {
+						_free(pointer);
+					}
+				};
+				sockets.set(context, socket);
+			} else {
+				const socket = sockets.get(context);
+				if (!socket)
+					return 0;
+				if ($0 === 1) {
+					if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount >= 1048576)
+						return 0;
+					socket.send(HEAPU8.slice($2, $2 + $3));
+				} else {
+					socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+					sockets.delete(context);
+					socket.close(1000);
+				}
+			}
+			return 1;
+		} catch (error) {
+			return 0;
+		}
+	}), operation, c, data, size, (uintptr_t)socket_event);
 }
 #else
 /* No socket waits or blocking easy_perform() in a render frame. The easy
@@ -223,14 +276,9 @@ l_close(lua_State *L) {
 	if (!c)
 		return 0;
 #ifdef __EMSCRIPTEN__
-	/* Both calls proxy synchronously to the browser thread. delete() removes
-	 * all handlers before this userdata can be freed. Never hold the mutex
-	 * across a proxied call. */
-	if (c->socket > 0) {
-		emscripten_websocket_close(c->socket, 1000, "");
-		emscripten_websocket_delete(c->socket);
-	}
-	pthread_mutex_destroy(&c->mutex);
+	/* Detach handlers synchronously before freeing their C context. Never
+	 * hold the queue lock while dispatching to the browser thread. */
+	socket_call(c, SOCKET_CLOSE, NULL, 0);
 #else
 	if (c->easy) {
 		if (c->state == OPEN) {
@@ -312,13 +360,7 @@ l_send(lua_State *L) {
 		return 1;
 	}
 #ifdef __EMSCRIPTEN__
-	size_t buffered = 0;
-	emscripten_websocket_get_buffered_amount(c->socket, &buffered);
-	int accepted = 0;
-	if (buffered < MAX_MESSAGE) {
-		accepted =
-			emscripten_websocket_send_binary(c->socket, (void *)data, (uint32_t)size) == EMSCRIPTEN_RESULT_SUCCESS;
-	}
+	int accepted = socket_call(c, SOCKET_SEND, data, size);
 #else
 	int accepted = c->outgoing.data == NULL;
 	if (accepted) {
@@ -335,9 +377,18 @@ l_send(lua_State *L) {
 }
 
 static int
+starts_with(const char *text, const char *prefix) {
+	while (*prefix) {
+		if (*text++ != *prefix++)
+			return 0;
+	}
+	return 1;
+}
+
+static int
 l_connect(lua_State *L) {
 	const char *url = luaL_checkstring(L, 1);
-	luaL_argcheck(L, !strncmp(url, "ws://", 5) || !strncmp(url, "wss://", 6), 1, "Expected ws:// or wss:// URL");
+	luaL_argcheck(L, starts_with(url, "ws://") || starts_with(url, "wss://"), 1, "Expected ws:// or wss:// URL");
 	size_t latest_size = 0;
 	const char *latest = luaL_optlstring(L, 2, "", &latest_size);
 	client **ud = lua_newuserdatauv(L, sizeof(*ud), 0);
@@ -349,20 +400,9 @@ l_connect(lua_State *L) {
 	for (size_t i = 0; i < latest_size; ++i)
 		c->coalesce[(unsigned char)latest[i]] = 1;
 #ifdef __EMSCRIPTEN__
-	pthread_mutex_init(&c->mutex, NULL);
-	EmscriptenWebSocketCreateAttributes attributes = {url, NULL, true};
-	c->socket = emscripten_websocket_new(&attributes);
-	if (c->socket <= 0) {
+	atomic_flag_clear(&c->mutex);
+	if (!socket_call(c, SOCKET_CONNECT, url, MAX_MESSAGE))
 		fail(c, "Browser WebSocket unavailable");
-		return 1;
-	}
-	/* Emscripten's current implementation invokes these on the browser thread.
-	 * Select that thread explicitly and only write to the C message queue. */
-	pthread_t thread = EM_CALLBACK_THREAD_CONTEXT_MAIN_RUNTIME_THREAD;
-	emscripten_websocket_set_onopen_callback_on_thread(c->socket, c, on_open, thread);
-	emscripten_websocket_set_onmessage_callback_on_thread(c->socket, c, on_message, thread);
-	emscripten_websocket_set_onerror_callback_on_thread(c->socket, c, on_error, thread);
-	emscripten_websocket_set_onclose_callback_on_thread(c->socket, c, on_close, thread);
 #else
 	c->easy = curl_easy_init();
 	c->multi = curl_multi_init();
