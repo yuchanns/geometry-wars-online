@@ -625,7 +625,6 @@ do
 	}
 	local function deliver(net, kind, body)
 		handlers._network_update("open", nil, { { kind, clone(body) } })
-		net.poll()
 	end
 	local function publish(net, time)
 		handlers._network_sent()

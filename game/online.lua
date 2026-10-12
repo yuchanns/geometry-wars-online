@@ -18,7 +18,6 @@ function M.new(ctx)
 		events = {},
 	}
 	local network = ltask.uniqueservice "network"
-	local inbox
 	local pending_send = false
 	local force_full, send_error = false, nil
 	local event_sequence, event_ack = 0, 0
@@ -39,25 +38,6 @@ function M.new(ctx)
 		end
 		send_error, net.error = reason, reason
 	end
-
-	-- Acknowledge after the frame consumes this batch, bounding the inbox.
-	ltask.dispatch {
-		_network_update = function(state, reason, messages)
-			inbox = {
-				state = state,
-				reason = reason,
-				messages = messages
-			}
-		end,
-		_network_sent = function()
-			pending_send = false
-			if send_error and net.error == send_error then
-				net.error = ""
-			end
-			send_error = nil
-		end,
-		_network_send_failed = send_failed,
-	}
 
 	local function send(kind, body, frame)
 		if not net.connected then
@@ -152,13 +132,7 @@ function M.new(ctx)
 		end
 	end
 
-	function net.poll()
-		local batch = inbox
-		if not batch then
-			return
-		end
-		inbox = nil
-		local state, reason = batch.state, batch.reason
+	local function receive(state, reason, messages)
 		if not net.connected and state == "open" then
 			net.error = ""
 		end
@@ -170,7 +144,7 @@ function M.new(ctx)
 			pending_send = false
 			net.events = {}
 		else
-			for _, message in ipairs(batch.messages) do
+			for _, message in ipairs(messages) do
 				local ok, err = pcall(handle_message, message[1], message[2])
 				if not ok then
 					net.error = tostring(err)
@@ -182,6 +156,20 @@ function M.new(ctx)
 		end
 		ltask.send(network, "received")
 	end
+
+	-- Service messages keep running when a background browser pauses rendering.
+	-- Consume and acknowledge here so input batches never wait for a game frame.
+	ltask.dispatch {
+		_network_update = receive,
+		_network_sent = function()
+			pending_send = false
+			if send_error and net.error == send_error then
+				net.error = ""
+			end
+			send_error = nil
+		end,
+		_network_send_failed = send_failed,
+	}
 
 	function net.publish(time)
 		local interval = net.host and 1 / 15 or 1 / 30

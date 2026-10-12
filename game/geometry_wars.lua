@@ -4340,7 +4340,6 @@ function callback.frame()
 	state.total_time = state.total_time + dt
 	state.scene_time = state.scene_time + dt
 	state.frame_dt = dt
-	multiplayer.poll()
 	local current_scene = flow.update()
 	if current_scene ~= nil then
 		state.sync_scene(current_scene)
