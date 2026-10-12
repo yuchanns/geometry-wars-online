@@ -1,0 +1,16 @@
+name: Build WebSocket extension
+description: Build the game's WebSocket and material extension with Soluna's bundled LuaMake
+
+runs:
+  using: composite
+  steps:
+    - uses: emscripten-core/setup-emsdk@v16
+      with:
+        version: 4.0.17
+        actions-cache-folder: emsdk-cache
+    - name: Build extension
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        chmod +x ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
+        ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc

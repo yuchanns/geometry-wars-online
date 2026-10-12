@@ -9,6 +9,9 @@ Build on Linux (C/C++ compiler and libcurl with WebSocket support):
 ```sh
 git clone --recurse-submodules https://github.com/yuchanns/geometry-wars-online.git
 cd geometry-wars-online
+cd 3rd/soluna
+./bin/luamake-bin/bin/linux/luamake
+cd ../..
 ./3rd/soluna/bin/luamake-bin/bin/linux/luamake
 cd dist/native
 ./soluna game/main.game 'cpath=./?.so'
@@ -19,6 +22,9 @@ cd dist/native
 Activate Emscripten and run from the repository root:
 
 ```sh
+cd 3rd/soluna
+./bin/luamake-bin/bin/linux/luamake -compiler emcc
+cd ../..
 ./3rd/soluna/bin/luamake-bin/bin/linux/luamake -compiler emcc
 cd website
 pnpm install

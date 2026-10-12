@@ -10,6 +10,7 @@ const repoRoot = path.resolve(websiteDir, '..')
 const runtimeDir = path.join(websiteDir, 'public/runtime')
 const audioDir = path.join(websiteDir, 'public/audio')
 const buildDir = path.join(repoRoot, 'bin/web')
+const engineDir = path.join(repoRoot, '3rd/soluna/bin/emcc/release')
 
 async function collectFiles(directory) {
   const files = []
@@ -27,8 +28,13 @@ async function collectFiles(directory) {
 
 await rm(runtimeDir, { recursive: true, force: true })
 await mkdir(runtimeDir, { recursive: true })
-for (const name of ['soluna.js', 'soluna.wasm', 'websocket.wasm'])
-  await copyFile(path.join(buildDir, name), path.join(runtimeDir, name))
+for (const [name, source] of [
+  ['soluna.js', process.env.SOLUNA_JS_PATH || path.join(engineDir, 'soluna.js')],
+  ['soluna.wasm', process.env.SOLUNA_WASM_PATH || path.join(engineDir, 'soluna.wasm')],
+  ['websocket.wasm', path.join(buildDir, 'websocket.wasm')],
+]) {
+  await copyFile(source, path.join(runtimeDir, name))
+}
 
 const gameDir = path.join(repoRoot, 'game')
 const entries = {}
